@@ -37,6 +37,7 @@ public:
     void addSubtitle(const QUrl &url, bool select = false);
     void selectStream(int index, bool subtitle);
     void setPaused(bool paused);
+    void setVolume(int volume);
     Q_INVOKABLE void stop();
     Q_INVOKABLE void togglePause();
     Q_INVOKABLE void seek(double seconds);

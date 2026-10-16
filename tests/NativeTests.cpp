@@ -58,6 +58,7 @@ private slots:
     }
     void init() {
         m_settings = std::make_unique<Settings>(); m_settings->clearSession(); m_settings->setPlaybackMode("auto");
+        m_settings->setThemeSongVolume(70);
         m_network = std::make_unique<FakeNetwork>();
         m_network->respond = [this](const FixtureRequest &request) {
             const auto path = request.request.url().path();
@@ -138,7 +139,14 @@ private slots:
         QTest::keyClick(m_window, Qt::Key_Return); QCOMPARE(m_settings->playbackMode(), "direct");
         QTest::keyClick(m_window, Qt::Key_Down); QTest::keyClick(m_window, Qt::Key_Return);
         QCOMPARE(m_settings->bitrate(), 4000000);
-        for (int i = 0; i < 5; ++i) QTest::keyClick(m_window, Qt::Key_Down);
+        for (int i = 0; i < 3; ++i) QTest::keyClick(m_window, Qt::Key_Down);
+        QTRY_VERIFY(object("themeVolumeSetting")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Right); QCOMPARE(m_settings->themeSongVolume(), 75);
+        Settings saved; QCOMPARE(saved.themeSongVolume(), 75);
+        QTest::keyClick(m_window, Qt::Key_Left); QCOMPARE(m_settings->themeSongVolume(), 70);
+        QTest::keyClick(m_window, Qt::Key_Up); QTRY_VERIFY(object("themeSongsSetting")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Down);
+        for (int i = 0; i < 3; ++i) QTest::keyClick(m_window, Qt::Key_Down);
         auto *accent = qobject_cast<QQuickItem *>(object("accentSetting")); QVERIFY(accent);
         QTRY_VERIFY(accent->hasActiveFocus());
         auto *scroll = qobject_cast<QQuickItem *>(object("settingsScroll")); QVERIFY(scroll);
@@ -191,20 +199,75 @@ private slots:
         QTest::keyClick(m_window, Qt::Key_Up);
         QTRY_VERIFY(object("shelf-0")->property("activeFocus").toBool());
     }
+    void libraryGridNavigationAndPagination() {
+        QVERIFY(signIn());
+        m_app->openLibrary(m_app->libraries().first().toMap()); QTRY_VERIFY(!m_app->busy());
+        auto *grid = qobject_cast<QQuickItem *>(object("libraryGrid")); QVERIFY(grid);
+        QTRY_VERIFY(grid->hasActiveFocus());
+        const int columns = grid->property("columns").toInt(); QVERIFY(columns > 1);
+        QTRY_COMPARE(object("libraryGridView")->property("count").toInt(), 60);
+        auto *first = qobject_cast<QQuickItem *>(object("gridCard-0")); QVERIFY(first);
+        auto *secondRow = qobject_cast<QQuickItem *>(object(qPrintable(QString("gridCard-%1").arg(columns)))) ; QVERIFY(secondRow);
+        QVERIFY(secondRow->y() > first->y()); QCOMPARE(secondRow->x(), first->x());
+        const auto preview = qEnvironmentVariable("JF_GRID_SCREENSHOT");
+        if (!preview.isEmpty()) QVERIFY(m_window->grabWindow().save(preview));
+        QTest::keyClick(m_window, Qt::Key_Right); QTest::keyClick(m_window, Qt::Key_Down);
+        QCOMPARE(grid->property("itemIndex").toInt(), columns + 1);
+        for (int i = 0; i < 2; ++i) QTest::keyClick(m_window, Qt::Key_Down);
+        const int selected = columns * 3 + 1;
+        QCOMPARE(grid->property("itemIndex").toInt(), selected);
+        auto *scroll = qobject_cast<QQuickItem *>(object("mediaFlick")); QVERIFY(scroll);
+        QTRY_VERIFY(scroll->property("contentY").toDouble() > 0);
+        auto *card = qobject_cast<QQuickItem *>(object(qPrintable(QString("gridCard-%1").arg(selected)))); QVERIFY(card);
+        const auto inside = [&] { return QRectF(0, 0, scroll->width(), scroll->height()).adjusted(-1, -1, 1, 1).contains(card->mapRectToItem(scroll, card->boundingRect())); };
+        QTRY_VERIFY(inside());
+        QTest::keyClick(m_window, Qt::Key_Return);
+        QTRY_VERIFY(object("detailView")->property("visible").toBool()); QTRY_VERIFY(!m_app->detailLoading());
+        QCOMPARE(m_app->detail()["id"].toString(), QString("movie-%1").arg(selected));
+        QTest::keyClick(m_window, Qt::Key_Escape); QTRY_VERIFY(grid->hasActiveFocus());
+        QCOMPARE(grid->property("itemIndex").toInt(), selected);
+        m_window->resize(800, 500); QTRY_VERIFY(grid->property("columns").toInt() < columns);
+        QTRY_VERIFY(inside());
+        m_settings->setUiScale(1.25); QTRY_VERIFY(inside());
+        m_settings->setUiScale(1.0);
+        for (int i = 0; i < 30 && !object("moreButton")->property("activeFocus").toBool(); ++i) QTest::keyClick(m_window, Qt::Key_Down);
+        QTRY_VERIFY(object("moreButton")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Return); QTRY_VERIFY(!m_app->busy());
+        QTRY_COMPARE(object("libraryGridView")->property("count").toInt(), 61);
+        QTRY_VERIFY(grid->hasActiveFocus()); QVERIFY(!m_app->hasMore());
+        QTest::keyClick(m_window, Qt::Key_Down); QCOMPARE(grid->property("itemIndex").toInt(), 60);
+        for (int i = 0; i < 30 && grid->hasActiveFocus(); ++i) QTest::keyClick(m_window, Qt::Key_Up);
+        QTRY_VERIFY(object("filterButton")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Return); QTRY_VERIFY(!m_app->busy());
+        QCOMPARE(m_app->libraryFilter(), "Favorites");
+    }
     void fullScreenSeriesAndEpisodeNavigation() {
         const auto original = m_network->respond;
         const QJsonObject series{{"Id", "series"}, {"Name", "A series"}, {"Type", "Series"}, {"IsFolder", true},
             {"Overview", "A crew crosses an unfamiliar ocean in search of a place to call home."}};
-        const QJsonObject season{{"Id", "season"}, {"Name", "Season 1"}, {"Type", "Season"}, {"SeriesId", "series"}, {"IsFolder", true}};
+        const QJsonArray seasons{
+            QJsonObject{{"Id", "season-1"}, {"Name", "Season 1"}, {"Type", "Season"}, {"SeriesId", "series"}, {"IsFolder", true}},
+            QJsonObject{{"Id", "season-2"}, {"Name", "Season 2"}, {"Type", "Season"}, {"SeriesId", "series"}, {"IsFolder", true}}};
         auto episode = movie("episode", "The crossing");
         episode["Type"] = "Episode"; episode["SeriesId"] = "series"; episode["SeriesName"] = "A series";
-        episode["SeasonId"] = "season"; episode["ParentIndexNumber"] = 1; episode["IndexNumber"] = 1;
+        const auto makeEpisode = [episode](const QString &seasonId, int index) {
+            auto item = episode;
+            item["Id"] = seasonId + "-episode-" + QString::number(index);
+            item["SeasonId"] = seasonId; item["SeasonName"] = "Season " + seasonId.right(1);
+            item["ParentIndexNumber"] = seasonId.right(1).toInt(); item["IndexNumber"] = index + 1;
+            return item;
+        };
         m_network->respond = [=](const FixtureRequest &request) {
             const auto path = request.request.url().path();
             if (path.endsWith("/Items/series")) return FixtureResponse{QJsonDocument(series).toJson()};
-            if (path.endsWith("/Items/episode")) return FixtureResponse{QJsonDocument(episode).toJson()};
-            if (path.endsWith("/Seasons")) return FixtureResponse{QJsonDocument(QJsonObject{{"Items", QJsonArray{season}}}).toJson()};
-            if (path.endsWith("/Episodes")) return FixtureResponse{QJsonDocument(QJsonObject{{"Items", QJsonArray{episode}}}).toJson()};
+            const auto id = path.section('/', -1);
+            if (path.contains("/Items/") && id.contains("-episode-"))
+                return FixtureResponse{QJsonDocument(makeEpisode(id.section("-episode-", 0, 0), id.right(1).toInt())).toJson()};
+            if (path.endsWith("/Seasons")) return FixtureResponse{QJsonDocument(QJsonObject{{"Items", seasons}}).toJson()};
+            if (path.endsWith("/Episodes")) {
+                const auto seasonId = QUrlQuery(request.request.url()).queryItemValue("SeasonId");
+                return FixtureResponse{QJsonDocument(QJsonObject{{"Items", QJsonArray{makeEpisode(seasonId, 0), makeEpisode(seasonId, 1)}}}).toJson(), 200, seasonId == "season-1" ? 40 : 0};
+            }
             return original(request);
         };
         QVERIFY(signIn());
@@ -214,28 +277,59 @@ private slots:
         QTRY_VERIFY(view->isVisible()); QTRY_VERIFY(object("playButton")->property("activeFocus").toBool());
         QCOMPARE(view->mapRectToScene(view->boundingRect()), QRectF(0, 0, m_window->width(), m_window->height()));
         QVERIFY(!object("libraryScreen")->property("visible").toBool());
-        QVERIFY(!object("detailPopup"));
-        QCOMPARE(object("playButton")->property("text").toString(), "Seasons");
+        QCOMPARE(object("playButton")->property("text").toString(), "Episodes");
+        QTRY_COMPARE(m_app->detail()["seasons"].toList().size(), 2);
+        QCOMPARE(object("seasonShelf-0")->property("title").toString(), "Season 1");
+        QCOMPARE(object("seasonShelf-1")->property("title").toString(), "Season 2");
+        QCOMPARE(m_app->title(), "Home"); QVERIFY(!m_app->canGoBack());
         const auto preview = qEnvironmentVariable("JF_SERIES_SCREENSHOT");
         if (!preview.isEmpty()) QVERIFY(m_window->grabWindow().save(preview));
-        QTest::keyClick(m_window, Qt::Key_Return);
-        QTRY_VERIFY(!view->isVisible()); QTRY_VERIFY(object("shelf-0")->property("activeFocus").toBool());
-        QTest::keyClick(m_window, Qt::Key_Return);
-        QTRY_COMPARE(m_app->title(), "Season 1"); QTRY_VERIFY(!m_app->busy());
-        QTRY_VERIFY(object("shelf-0")->property("activeFocus").toBool());
-        QTest::keyClick(m_window, Qt::Key_Return);
-        QTRY_VERIFY(view->isVisible()); QTRY_VERIFY(!m_app->detailLoading());
+        QTest::keyClick(m_window, Qt::Key_Down); QTest::keyClick(m_window, Qt::Key_Down);
+        QTRY_VERIFY(object("watchedButton")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Down);
+        QTRY_VERIFY(object("seasonShelf-0")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Up);
         QTRY_VERIFY(object("playButton")->property("activeFocus").toBool());
-        QCOMPARE(m_app->detail()["type"].toString(), "Episode");
-        qobject_cast<QQuickItem *>(object("seriesButton"))->forceActiveFocus(); QTest::keyClick(m_window, Qt::Key_Return);
+        QTest::keyClick(m_window, Qt::Key_Return);
+        QTRY_VERIFY(object("seasonShelf-0")->property("activeFocus").toBool());
+        m_window->resize(800, 500);
+        QTest::keyClick(m_window, Qt::Key_Down);
+        QTRY_VERIFY(object("seasonShelf-1")->property("activeFocus").toBool());
+        auto *scroll = qobject_cast<QQuickItem *>(object("detailScroll")); QVERIFY(scroll);
+        auto *shelf = qobject_cast<QQuickItem *>(object("seasonShelf-1")); QVERIFY(shelf);
+        QTRY_VERIFY(QRectF(0, 0, scroll->width(), scroll->height()).contains(shelf->mapRectToItem(scroll, shelf->boundingRect())));
+        QTest::keyClick(m_window, Qt::Key_Right);
+        QCOMPARE(object("seasonShelf-1")->property("itemIndex").toInt(), 1);
+        QTest::keyClick(m_window, Qt::Key_Return);
+        QTRY_VERIFY(!m_app->detailLoading());
+        QTRY_VERIFY(object("playButton")->property("activeFocus").toBool());
+        QCOMPARE(m_app->detail()["id"].toString(), "season-2-episode-1");
+        QVERIFY(view->isVisible()); QCOMPARE(m_app->title(), "Home");
+        qobject_cast<QQuickItem *>(object("seasonButton"))->forceActiveFocus(); QTest::keyClick(m_window, Qt::Key_Return);
         QTRY_COMPARE(m_app->detail()["type"].toString(), "Series");
+        QTRY_VERIFY(object("seasonShelf-1") && object("seasonShelf-1")->property("activeFocus").toBool());
+        QCOMPARE(object("seasonShelf-1")->property("itemIndex").toInt(), 1);
+        QTest::keyClick(m_window, Qt::Key_Escape);
+        QTRY_COMPARE(m_app->detail()["type"].toString(), "Episode");
+        QTRY_VERIFY(object("playButton")->property("activeFocus").toBool());
+        qobject_cast<QQuickItem *>(object("seriesButton"))->forceActiveFocus(); QTest::keyClick(m_window, Qt::Key_Return);
+        QTRY_VERIFY(object("seasonShelf-0")); QTRY_VERIFY(!m_app->detail()["seasonsLoading"].toBool());
         QTest::keyClick(m_window, Qt::Key_Escape);
         QTRY_COMPARE(m_app->detail()["type"].toString(), "Episode");
         QTRY_VERIFY(object("playButton")->property("activeFocus").toBool());
         QTest::keyClick(m_window, Qt::Key_Escape);
+        QTRY_COMPARE(m_app->detail()["type"].toString(), "Series");
+        QTRY_VERIFY(object("seasonShelf-1") && object("seasonShelf-1")->property("activeFocus").toBool());
+        QCOMPARE(object("seasonShelf-1")->property("itemIndex").toInt(), 1);
+        QTest::keyClick(m_window, Qt::Key_Escape);
         QTRY_VERIFY(!view->isVisible()); QTRY_VERIFY(object("shelf-0")->property("activeFocus").toBool());
-        QCOMPARE(m_app->title(), "Season 1");
-        QCOMPARE(m_window->property("selectedMedia").toMap()["id"].toString(), "episode");
+        QCOMPARE(m_app->title(), "Home"); QVERIFY(!m_app->canGoBack());
+        const QVariant seasonItem = QVariantMap{{"id", "season-2"}, {"type", "Season"}, {"folder", true}, {"seriesId", "series"}, {"seriesName", "A series"}};
+        QVERIFY(QMetaObject::invokeMethod(m_window, "activate", Q_ARG(QVariant, seasonItem)));
+        QTRY_VERIFY(view->isVisible());
+        QTRY_VERIFY(object("seasonShelf-1") && object("seasonShelf-1")->property("activeFocus").toBool());
+        QCOMPARE(m_app->title(), "Home"); QVERIFY(!m_app->canGoBack());
+        QTest::keyClick(m_window, Qt::Key_Escape); QTRY_VERIFY(!view->isVisible());
     }
     void profilePictureAndThemeSongLifecycle() {
         QTcpServer server;
@@ -292,7 +386,14 @@ private slots:
         QTRY_VERIFY(!m_app->detailLoading());
         QTRY_VERIFY_WITH_TIMEOUT(!loaded.isEmpty() && theme->position() > 0.1, 5000);
         QVERIFY(!m_player->active());
-        double volume = 0; QCOMPARE(mpv_get_property(theme->core()->handle, "volume", MPV_FORMAT_DOUBLE, &volume), 0); QCOMPARE(volume, 35.0);
+        double volume = 0; QCOMPARE(mpv_get_property(theme->core()->handle, "volume", MPV_FORMAT_DOUBLE, &volume), 0); QCOMPARE(volume, 70.0);
+        const auto loads = loaded.size();
+        m_settings->setThemeSongVolume(90);
+        QCOMPARE(mpv_get_property(theme->core()->handle, "volume", MPV_FORMAT_DOUBLE, &volume), 0); QCOMPARE(volume, 90.0);
+        QTest::qWait(40); QVERIFY(theme->active()); QCOMPARE(loaded.size(), loads);
+        m_settings->setThemeSongVolume(150); QCOMPARE(m_settings->themeSongVolume(), 100);
+        m_settings->setThemeSongVolume(-5); QCOMPARE(m_settings->themeSongVolume(), 0);
+        m_settings->setThemeSongVolume(85); Settings saved; QCOMPARE(saved.themeSongVolume(), 85);
         QVERIFY(std::any_of(assets.begin(), assets.end(), [](const auto &url) {
             return url.path() == "/base/Audio/theme/stream" && QUrlQuery(url).queryItemValue("api_key") == "fixture-token";
         }));
@@ -359,6 +460,7 @@ private slots:
         m_network->respond = [=](const FixtureRequest &request) {
             const auto path = request.request.url().path();
             if (path.endsWith("/Items/episode")) return FixtureResponse{QJsonDocument(episode).toJson()};
+            if (path.endsWith("/Items/series")) return FixtureResponse{R"({"Id":"series","Name":"A series","Type":"Series","IsFolder":true})"};
             if (path.endsWith("/Seasons")) return FixtureResponse{R"({"Items":[{"Id":"season","Name":"Season 2","Type":"Season","SeriesId":"series","IsFolder":true}]})"};
             if (path.endsWith("/Episodes")) return FixtureResponse{QJsonDocument(QJsonObject{{"Items", QJsonArray{episode}}, {"TotalRecordCount", 1}}).toJson()};
             return original(request);
@@ -369,14 +471,17 @@ private slots:
         QVERIFY(detail["backdrop"].toString().contains("/Items/series/Images/Backdrop/0"));
         QCOMPARE(detail["posterBlurHash"].toString(), posterHash); QCOMPARE(detail["backdropBlurHash"].toString(), backdropHash);
         QCOMPARE(detail["imageAspect"].toDouble(), 16.0 / 9);
-        m_app->openSeries(detail); QTRY_VERIFY(!m_app->busy());
-        QCOMPARE(m_app->title(), "A series"); QVERIFY(!m_app->canFilter());
-        auto season = m_app->shelves().first().toMap()["items"].toList().first().toMap();
-        m_app->open(season); QTRY_VERIFY(!m_app->busy());
+        m_app->openSeries(detail);
+        QTRY_VERIFY(!m_app->detailLoading() && !m_app->detail()["seasonsLoading"].toBool());
+        QCOMPARE(m_app->detail()["title"].toString(), "A series");
+        const auto sections = m_app->detail()["seasons"].toList(); QCOMPARE(sections.size(), 1);
+        QCOMPARE(sections.first().toMap()["title"].toString(), "Season 2");
+        QCOMPARE(sections.first().toMap()["items"].toList().first().toMap()["id"].toString(), "episode");
         QCOMPARE(m_network->requests.last().request.url().path(), "/base/Shows/series/Episodes");
-        QCOMPARE(QUrlQuery(m_network->requests.last().request.url()).queryItemValue("SeasonId"), "season");
-        m_app->back(); QTRY_VERIFY(!m_app->busy()); QCOMPARE(m_app->title(), "A series");
-        m_app->back(); QTRY_VERIFY(!m_app->busy()); QCOMPARE(m_app->title(), "Home");
+        const QUrlQuery episodeQuery(m_network->requests.last().request.url());
+        QCOMPARE(episodeQuery.queryItemValue("SeasonId"), "season");
+        QVERIFY(!episodeQuery.hasQueryItem("Limit"));
+        QCOMPARE(m_app->title(), "Home"); QVERIFY(!m_app->canGoBack());
         episode.remove("ImageTags");
         m_network->respond = [=](const FixtureRequest &) { return FixtureResponse{QJsonDocument(episode).toJson()}; };
         m_app->showDetails({{"id", "episode"}}); QTRY_VERIFY(!m_app->detailLoading());
@@ -433,6 +538,55 @@ private slots:
         QTRY_VERIFY(!m_app->detailLoading()); QCOMPARE(m_app->detail()["id"].toString(), "new");
         QTest::qWait(100); QCOMPARE(m_app->detail()["id"].toString(), "new");
         m_app->showDetails({{"id", "old"}}); m_app->closeDetails(); QTest::qWait(100);
+        QVERIFY(m_app->detail().isEmpty()); QVERIFY(!m_app->detailLoading());
+    }
+    void seasonSectionsHandleErrorsAndStaleReplies() {
+        QVERIFY(signIn());
+        const auto original = m_network->respond;
+        auto mode = std::make_shared<int>(0);
+        m_network->respond = [=, this](const FixtureRequest &request) {
+            const auto path = request.request.url().path();
+            if (path.endsWith("/Items/series")) return FixtureResponse{R"({"Id":"series","Name":"A series","Type":"Series","IsFolder":true})"};
+            if (path.endsWith("/Seasons")) {
+                if (*mode == 0) return FixtureResponse{R"({"Items":[]})"};
+                if (*mode == 1) return FixtureResponse{"{}", 503};
+                return FixtureResponse{R"({"Items":[{"Id":"failed","Name":"Specials"},{"Id":"empty","Name":"Season 1"},{"Id":"full","Name":"Season 2"}]})"};
+            }
+            if (path.endsWith("/Episodes")) {
+                const auto id = QUrlQuery(request.request.url()).queryItemValue("SeasonId");
+                if (id == "failed") return FixtureResponse{"{}", 500};
+                QJsonArray episodes;
+                if (id == "full") for (int i = 0; i < 61; ++i) {
+                    auto item = movie(QString("episode-%1").arg(i)); item["Type"] = "Episode"; episodes.append(item);
+                }
+                return FixtureResponse{QJsonDocument(QJsonObject{{"Items", episodes}}).toJson(), 200, 80};
+            }
+            return original(request);
+        };
+        const QVariantMap series{{"id", "series"}, {"type", "Series"}, {"folder", true}};
+        m_app->showDetails(series);
+        QTRY_VERIFY(!m_app->detailLoading() && !m_app->detail()["seasonsLoading"].toBool());
+        QVERIFY(m_app->detail()["seasons"].toList().isEmpty());
+        *mode = 1; m_app->showDetails(series);
+        QTRY_VERIFY(!m_app->detailLoading() && !m_app->detail()["seasonsLoading"].toBool());
+        QVERIFY(m_app->detail()["seasonsError"].toString().contains("503"));
+        *mode = 2; m_app->showDetails(series);
+        QTRY_VERIFY(!m_app->detailLoading() && !m_app->detail()["seasonsLoading"].toBool());
+        const auto sections = m_app->detail()["seasons"].toList(); QCOMPARE(sections.size(), 3);
+        QVERIFY(sections[0].toMap()["error"].toString().contains("500"));
+        QVERIFY(sections[1].toMap()["items"].toList().isEmpty());
+        QCOMPARE(sections[2].toMap()["items"].toList().size(), 61);
+        const auto episodeRequests = [this] {
+            return std::count_if(m_network->requests.cbegin(), m_network->requests.cend(), [](const auto &r) { return r.request.url().path().endsWith("/Episodes"); });
+        };
+        auto count = episodeRequests();
+        m_app->showDetails(series); QTRY_COMPARE(episodeRequests(), count + 3);
+        m_app->showDetails({{"id", "movie"}}); QTRY_VERIFY(!m_app->detailLoading());
+        QTest::qWait(100);
+        QCOMPARE(m_app->detail()["id"].toString(), "movie"); QVERIFY(!m_app->detail().contains("seasons"));
+        count = episodeRequests();
+        m_app->showDetails(series); QTRY_COMPARE(episodeRequests(), count + 3);
+        m_app->closeDetails(); QTest::qWait(100);
         QVERIFY(m_app->detail().isEmpty()); QVERIFY(!m_app->detailLoading());
     }
     void longDetailsStayInsideSmallWindow() {

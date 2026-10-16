@@ -43,9 +43,9 @@ Installation is optional: `cmake --install build --prefix ~/.local` installs the
 | Menu | F1 | Settings |
 | — | F11 | Toggle fullscreen |
 
-Titles open on a full-screen detail page with backdrop artwork. B returns to the previous detail page or library. Series opens seasons, selecting a season opens its episodes, and selecting an episode opens its detail page. The Jellyfin profile image in the top-right corner opens Settings; an initial appears when no image is available.
+Titles open on a full-screen detail page with backdrop artwork. Each season appears as an episode row below the series details; the Episodes button jumps to these rows. Selecting an episode opens its details, and B returns to the same season and episode selection. An episode's Season link jumps to that row on the series page. The Jellyfin profile image in the top-right corner opens Settings; an initial appears when no image is available.
 
-Theme songs supplied by the server play at reduced volume on detail pages, including inherited series themes for episodes. They stop when leaving the page or starting video and do not create video playback sessions. Disable them in **Settings → Theme songs**. Missing themes are ignored.
+Theme songs supplied by the server play on detail pages, including inherited series themes for episodes. Adjust **Settings → Theme volume** from 0–100% with Left/Right or the slider; the saved level applies immediately and defaults to 70%. They stop when leaving the page or starting video and do not create video playback sessions. Disable them in **Settings → Theme songs**. Missing themes are ignored.
 
 Press Down in the player to reach pause, playback settings, and stop. Playback settings groups quality, audio, subtitles, and media info. Title details also has an expandable playback settings row for choosing options before playing; cast and chapters expand separately. Up or B hides the player controls; B again stops playback. After ten seconds paused without input, the video dims and shows the title and episode. The controller can be disconnected and reconnected without restarting.
 
@@ -53,10 +53,10 @@ Press Down in the player to reach pause, playback settings, and stop. Playback s
 
 - Server sign-in, optional remembered sessions, and sign-out.
 - Server library names and order in the top navigation, with continue watching, next episodes, and recent titles for each video library.
-- Library/folder browsing, Movies and Shows catalogs, pagination, search, favorites/watched filters, and sorting by name, date added, or rating.
-- Full-screen title details with server-fetched ratings, genres, cast/crew, chapter playback, favorites, and watched/unwatched actions.
+- Library/folder browsing, Movies and Shows catalogs, and search in a responsive poster grid that scrolls down, with pagination, favorites/watched filters, and sorting by name, date added, or rating.
+- Full-screen title details with server-fetched ratings, genres, cast/crew, chapter playback, favorites, watched/unwatched actions, and a resume button with playback progress along its lower edge.
 - Jellyfin profile images and optional background theme songs, including series themes inherited by episodes.
-- Series → seasons → episodes browsing in server order, links from an episode to its series and season, and next-episode details.
+- Season sections below series details, with episodes in server order, links from an episode to its series and season section, and next-episode details.
 - Artwork chosen by image role and owner, landscape episode cards, and lazy loading with the server’s matching BlurHash as the placeholder.
 - Scrollable detail pages with controller focus scrolling, including long titles at 800×500.
 - Direct play over authenticated HTTP and Jellyfin-negotiated HLS transcoding, selected using a libmpv device profile.

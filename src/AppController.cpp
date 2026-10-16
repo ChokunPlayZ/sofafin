@@ -1,6 +1,7 @@
 #include "AppController.h"
 #include <QJsonArray>
 #include <QUrlQuery>
+#include <memory>
 
 namespace {
 const QString fields = "Overview,Genres,PrimaryImageAspectRatio,ParentId,ChildCount";
@@ -18,8 +19,10 @@ QUrlQuery query(std::initializer_list<std::pair<QString, QString>> values) {
 AppController::AppController(Settings *settings, MpvPlayer *player, QObject *parent, QNetworkAccessManager *transport)
     : QObject(parent), m_settings(settings), m_player(player), m_themePlayer(new MpvPlayer(this, true)), m_api(settings->value("deviceId").toString(), this, transport) {
     m_themePlayer->setObjectName("themePlayer");
+    m_themePlayer->setVolume(settings->themeSongVolume());
     m_themeEnabled = settings->themeSongs();
     connect(settings, &Settings::changed, this, [this] {
+        m_themePlayer->setVolume(m_settings->themeSongVolume());
         if (m_themeEnabled == m_settings->themeSongs()) return;
         m_themeEnabled = m_settings->themeSongs();
         stopThemeSong();
@@ -220,6 +223,8 @@ void AppController::home(const QString &category) {
 }
 void AppController::open(const QVariantMap &item) {
     if (!item.value("folder").toBool()) return;
+    if (item.value("type") == "Series") { showDetails(item); return; }
+    if (item.value("type") == "Season") { openSeries(item); return; }
     stopThemeSong();
     m_history.append({{"title", m_title}, {"parent", m_pageParent}, {"search", m_pageSearch}, {"category", m_pageCategory}, {"type", m_pageType}, {"series", m_pageSeries}, {"filter", m_filter}, {"sort", m_sort}});
     ++m_generation; m_title = item.value("title").toString(); m_pageParent = item.value("id").toString();
@@ -264,8 +269,11 @@ void AppController::showDetails(const QVariantMap &item) {
         if (result.value("Id").toString() != m_detail.value("id").toString()) {
             emit detailsChanged(); setError("The server did not return the requested title."); return;
         }
-        m_detail = normalize(result); emit detailsChanged();
+        m_detail = normalize(result);
+        if (m_detail.value("type") == "Series") m_detail["seasonsLoading"] = true;
+        emit detailsChanged();
         fetchThemeSong();
+        if (m_detail.value("type") == "Series") fetchDetailSeasons(generation);
         if (m_detail.value("type") == "Episode" && !m_detail.value("seriesId").toString().isEmpty()) {
             m_api.get("Shows/" + m_detail.value("seriesId").toString() + "/Episodes",
                 query({{"UserId", m_userId}, {"StartItemId", m_detail.value("id").toString()}, {"Limit", "2"}, {"Fields", fields}, {"IsMissing", "false"}}),
@@ -273,6 +281,42 @@ void AppController::showDetails(const QVariantMap &item) {
                 if (generation != m_detailGeneration || !e.isEmpty()) return;
                 const auto episodes = items(r);
                 if (episodes.size() > 1) m_detail["nextEpisode"] = episodes[1];
+                emit detailsChanged();
+            });
+        }
+    });
+}
+void AppController::fetchDetailSeasons(int generation) {
+    const auto seriesId = m_detail.value("id").toString();
+    m_api.get("Shows/" + seriesId + "/Seasons", query({{"UserId", m_userId}, {"Fields", fields}, {"IsMissing", "false"}}),
+        [this, generation, seriesId](const QJsonObject &result, const QString &error) {
+        if (generation != m_detailGeneration) return;
+        auto seasons = std::make_shared<QVariantList>();
+        for (const auto &value : items(result)) {
+            const auto season = value.toMap();
+            if (!season.value("id").toString().isEmpty())
+                seasons->append(QVariantMap{{"id", season.value("id")}, {"title", season.value("title")}, {"items", QVariantList{}}});
+        }
+        if (!error.isEmpty() || seasons->isEmpty()) {
+            m_detail["seasonsLoading"] = false;
+            m_detail["seasonsError"] = error;
+            m_detail["seasons"] = QVariantList{};
+            emit detailsChanged(); return;
+        }
+        auto pending = std::make_shared<int>(seasons->size());
+        for (int index = 0; index < seasons->size(); ++index) {
+            const auto seasonId = seasons->at(index).toMap().value("id").toString();
+            m_api.get("Shows/" + seriesId + "/Episodes",
+                query({{"UserId", m_userId}, {"SeasonId", seasonId}, {"Fields", fields}, {"IsMissing", "false"}}),
+                [this, generation, seasons, pending, index](const QJsonObject &r, const QString &e) {
+                if (generation != m_detailGeneration) return;
+                auto section = seasons->at(index).toMap();
+                section["items"] = e.isEmpty() ? items(r) : QVariantList{};
+                section["error"] = e;
+                (*seasons)[index] = section;
+                if (--*pending > 0) return;
+                m_detail["seasons"] = *seasons;
+                m_detail["seasonsLoading"] = false;
                 emit detailsChanged();
             });
         }
@@ -307,12 +351,10 @@ void AppController::fetchThemeSong() {
 void AppController::openSeries(const QVariantMap &item) {
     const auto id = item.value("seriesId").toString();
     if (id.isEmpty()) return;
-    open({{"id", id}, {"title", item.value("seriesName")}, {"type", "Series"}, {"folder", true}});
+    showDetails({{"id", id}, {"title", item.value("seriesName")}, {"type", "Series"}, {"folder", true}});
 }
 void AppController::openSeason(const QVariantMap &item) {
-    const auto id = item.value("seasonId").toString();
-    if (id.isEmpty()) return;
-    open({{"id", id}, {"title", item.value("seasonName", "Episodes").toString()}, {"seriesId", item.value("seriesId")}, {"type", "Season"}, {"folder", true}});
+    openSeries(item);
 }
 void AppController::setLibraryFilter(const QString &filter) {
     if (!QStringList{"All", "Favorites", "Unwatched", "Watched"}.contains(filter) || m_pageCategory == "Home" || m_pageType == "Series" || m_pageType == "Season") return;
@@ -377,15 +419,7 @@ void AppController::fetchPage(bool append) {
         q.addQueryItem("SortBy", m_sort == "Recently added" ? "DateCreated" : "CommunityRating");
         q.addQueryItem("SortOrder", "Descending");
     }
-    QString path = "Users/" + m_userId + "/Items";
-    if (m_pageType == "Series") {
-        path = "Shows/" + m_pageParent + "/Seasons";
-        q = query({{"UserId", m_userId}, {"Fields", fields}, {"IsMissing", "false"}});
-    } else if (m_pageType == "Season" && !m_pageSeries.isEmpty()) {
-        path = "Shows/" + m_pageSeries + "/Episodes";
-        q = query({{"UserId", m_userId}, {"SeasonId", m_pageParent}, {"Fields", fields}, {"IsMissing", "false"},
-            {"StartIndex", QString::number(m_loaded)}, {"Limit", "60"}});
-    }
+    const QString path = "Users/" + m_userId + "/Items";
     emit changed();
     m_api.get(path, q, [this, generation, append](const QJsonObject &r, const QString &e) {
         if (generation != m_generation) return;

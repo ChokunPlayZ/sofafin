@@ -31,6 +31,7 @@ ApplicationWindow {
         if (Player.active || App.playbackPending) return
         if (options.opened || notification.opened || exitPrompt.opened || searchPopup.opened) return
         if (detailView.opened) { detailView.restoreFocus(); return }
+        if (libraryGrid.visible) { libraryGrid.focusFirst(); return }
         for (let i = 0; i < shelves.count; ++i) {
             let shelf = shelves.itemAt(i)
             if (shelf && shelf.visible) { shelf.focusFirst(); return }
@@ -53,7 +54,8 @@ ApplicationWindow {
         else if (App.hasMore) moreButton.forceActiveFocus()
     }
     function activate(media) {
-        if (media.type === "CollectionFolder" || media.type === "Folder" || media.type === "Season") App.open(media)
+        if (media.type === "Season") { App.openSeries(media); detailView.openAtSeason(media.id) }
+        else if (media.type === "CollectionFolder" || media.type === "Folder") App.open(media)
         else { App.showDetails(media); detailView.open() }
     }
     function edit(field) {
@@ -193,6 +195,7 @@ ApplicationWindow {
                 ProfileButton { objectName: "profileButton"; onClicked: { options.open(); modeSetting.forceActiveFocus() } }
             }
             Column {
+                visible: !App.canFilter
                 x: 42; y: 116; spacing: 10; width: parent.width - 84
                 Text { width: parent.width; text: window.selectedMedia.title || ""; color: "#f5f8fb"; font.pixelSize: Math.min(42, window.width * 0.034); font.weight: Font.Bold; elide: Text.ElideRight }
                 Text { width: parent.width; elide: Text.ElideRight; text: window.selectedMedia.subtitle || ""; color: "#9db4c6"; font.pixelSize: 14 }
@@ -200,7 +203,8 @@ ApplicationWindow {
             }
             Flickable {
                 id: mediaFlick
-                anchors { left: parent.left; right: parent.right; top: parent.top; bottom: footer.top; leftMargin: 42; rightMargin: 42; topMargin: 260 }
+                objectName: "mediaFlick"
+                anchors { left: parent.left; right: parent.right; top: parent.top; bottom: footer.top; leftMargin: 42; rightMargin: 42; topMargin: App.canFilter ? 116 : 260 }
                 clip: true; contentHeight: shelfColumn.height + 15; boundsBehavior: Flickable.StopAtBounds
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                 Column {
@@ -214,7 +218,7 @@ ApplicationWindow {
                     }
                     Repeater {
                         id: shelves
-                        model: App.shelves
+                        model: App.canFilter ? [] : App.shelves
                         MediaShelf {
                             required property var modelData
                             required property int index
@@ -224,13 +228,38 @@ ApplicationWindow {
                             initialIndex: window.selectedIndices[modelData.title] || 0
                             cardWidth: 156 * Preferences.uiScale; cardHeight: 226 * Preferences.uiScale
                             loadArtwork: libraryScreen.visible && y + shelfColumn.y + height >= mediaFlick.contentY && y + shelfColumn.y <= mediaFlick.contentY + mediaFlick.height
-                            onSelected: media => { window.selectedMedia = media; window.selectedIndices[title] = itemIndex }
+                            onSelected: (media, selectedIndex) => { window.selectedMedia = media; window.selectedIndices[title] = selectedIndex }
                             onActivated: media => window.activate(media)
                             onMoveUp: window.focusShelf(index, -1)
                             onMoveDown: window.focusShelf(index, 1)
                         }
                     }
-                    NavButton { id: moreButton; text: App.busy ? "Loading…" : "Load more"; visible: App.hasMore; enabled: !App.busy; onClicked: App.loadMore() }
+                    MediaGrid {
+                        id: libraryGrid
+                        objectName: "libraryGrid"
+                        width: shelfColumn.width - 14
+                        title: App.title; items: App.canFilter && App.shelves.length ? App.shelves[0].items : []
+                        accent: window.accent; preferredCardWidth: 156 * Preferences.uiScale
+                        loadArtwork: libraryScreen.visible
+                        viewportTop: mediaFlick.contentY - y; viewportHeight: mediaFlick.height
+                        onSelected: (media, selectedIndex) => { window.selectedMedia = media; window.selectedIndices[title] = selectedIndex }
+                        onActivated: media => window.activate(media)
+                        onMoveUp: { mediaFlick.contentY = 0; filterButton.forceActiveFocus() }
+                        onMoveDown: if (App.hasMore) moreButton.forceActiveFocus()
+                        onRevealRequested: (top, itemHeight) => {
+                            const position = y + top
+                            if (position < mediaFlick.contentY) mediaFlick.contentY = position
+                            else if (position + itemHeight > mediaFlick.contentY + mediaFlick.height)
+                                mediaFlick.contentY = position + itemHeight - mediaFlick.height
+                        }
+                    }
+                    NavButton {
+                        id: moreButton; objectName: "moreButton"
+                        text: App.busy ? "Loading…" : "Load more"; visible: App.hasMore; enabled: !App.busy
+                        upTarget: libraryGrid.visible ? libraryGrid : null
+                        onActiveFocusChanged: if (activeFocus) mediaFlick.contentY = Math.max(0, y + height - mediaFlick.height)
+                        onClicked: App.loadMore()
+                    }
                     Text { visible: !App.busy && App.shelves.every(s => s.items.length === 0); text: "No titles"; color: "#94adbf"; font.pixelSize: 18; topPadding: 30 }
                     BusyIndicator { running: App.busy; visible: running; width: 40; height: 40 }
                 }
@@ -305,7 +334,40 @@ ApplicationWindow {
                     NavButton { Layout.fillWidth: true; text: "Streaming limit"; value: Preferences.bitrate / 1000000 + " Mbps"; flat: true; onActiveFocusChanged: if (activeFocus) options.reveal(this); onClicked: { let rates = [4000000, 8000000, 20000000, 40000000, 80000000, 120000000]; Preferences.bitrate = rates[(rates.indexOf(Preferences.bitrate) + 1) % rates.length] } }
                     NavButton { Layout.fillWidth: true; text: "Hardware decoding"; value: Preferences.hardwareDecoding ? "Automatic" : "Off"; flat: true; onActiveFocusChanged: if (activeFocus) options.reveal(this); onClicked: Preferences.hardwareDecoding = !Preferences.hardwareDecoding }
                     NavButton { objectName: "themeSongsSetting"; Layout.fillWidth: true; text: "Theme songs"; value: Preferences.themeSongs ? "On" : "Off"; flat: true; onActiveFocusChanged: if (activeFocus) options.reveal(this); onClicked: Preferences.themeSongs = !Preferences.themeSongs }
-                    NavButton { Layout.fillWidth: true; text: "Fullscreen"; value: Preferences.fullscreen ? "On" : "Off"; flat: true; onActiveFocusChanged: if (activeFocus) options.reveal(this); onClicked: { Preferences.fullscreen = !Preferences.fullscreen; window.visibility = Preferences.fullscreen ? Window.FullScreen : Window.Windowed } }
+                    ColumnLayout {
+                        id: themeVolumeRow
+                        Layout.fillWidth: true; Layout.leftMargin: 16; Layout.rightMargin: 16; spacing: 0
+                        visible: Preferences.themeSongs
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Text { Layout.fillWidth: true; text: "Theme volume"; color: "#edf5fb"; font.pixelSize: 16 }
+                            Text { text: Preferences.themeSongVolume + "%"; color: window.accent; font.pixelSize: 16 }
+                        }
+                        Slider {
+                            id: themeVolume
+                            objectName: "themeVolumeSetting"
+                            Layout.fillWidth: true; implicitHeight: 38
+                            from: 0; to: 100; stepSize: 5; value: Preferences.themeSongVolume
+                            activeFocusOnTab: true
+                            Accessible.name: "Theme song volume"
+                            onMoved: Preferences.themeSongVolume = value
+                            onActiveFocusChanged: if (activeFocus) options.reveal(themeVolumeRow)
+                            Keys.onUpPressed: themeVolume.nextItemInFocusChain(false).forceActiveFocus()
+                            Keys.onDownPressed: fullscreenSetting.forceActiveFocus()
+                            background: Rectangle {
+                                x: themeVolume.leftPadding; y: themeVolume.topPadding + (themeVolume.availableHeight - height) / 2
+                                width: themeVolume.availableWidth; height: 5; radius: 2.5; color: "#354b5d"
+                                Rectangle { width: parent.width * themeVolume.visualPosition; height: parent.height; radius: parent.radius; color: window.accent }
+                            }
+                            handle: Rectangle {
+                                x: themeVolume.leftPadding + themeVolume.visualPosition * (themeVolume.availableWidth - width)
+                                y: themeVolume.topPadding + (themeVolume.availableHeight - height) / 2
+                                width: 18; height: 18; radius: 9; color: window.accent
+                                border.width: themeVolume.activeFocus ? 3 : 0; border.color: "white"
+                            }
+                        }
+                    }
+                    NavButton { id: fullscreenSetting; Layout.fillWidth: true; text: "Fullscreen"; value: Preferences.fullscreen ? "On" : "Off"; flat: true; onActiveFocusChanged: if (activeFocus) options.reveal(this); onClicked: { Preferences.fullscreen = !Preferences.fullscreen; window.visibility = Preferences.fullscreen ? Window.FullScreen : Window.Windowed } }
                     NavButton { Layout.fillWidth: true; text: "Poster size"; value: Math.round(Preferences.uiScale * 100) + "%"; flat: true; onActiveFocusChanged: if (activeFocus) options.reveal(this); onClicked: Preferences.uiScale = Preferences.uiScale >= 1.24 ? 0.85 : Math.min(1.25, Preferences.uiScale + 0.1) }
                     NavButton { objectName: "accentSetting"; Layout.fillWidth: true; text: "Accent"; value: ({"#66c0f4": "Steam blue", "#76dfba": "Sea glass", "#f3bb70": "Warm amber"})[Preferences.accent]; flat: true; onActiveFocusChanged: if (activeFocus) options.reveal(this); onClicked: { let colors = ["#66c0f4", "#76dfba", "#f3bb70"]; Preferences.accent = colors[(colors.indexOf(Preferences.accent) + 1) % 3] } }
                     Text { Layout.fillWidth: true; text: "Streaming changes apply to the next video."; color: "#8eacbf"; font.pixelSize: 12; wrapMode: Text.WordWrap; topPadding: 8 }
