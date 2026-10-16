@@ -65,7 +65,7 @@ ctest --test-dir build --output-on-failure
 
 Tests cover playback policy, media-version selection, base paths, token handling, malformed responses, expired/stale sessions, controller-style UI navigation, the on-screen keyboard, browsing/search/pagination, and actual libmpv decoding/pause/seek/resume of a generated local clip. The player test uses libmpv's software render API to run without a display; the application uses the OpenGL render API. The loopback HTTP test reports a skip if the execution environment forbids sockets.
 
-To exercise a real server, provide a disposable account through environment variables. The checker authenticates, browses libraries, negotiates direct play and forced transcoding, and asks mpv to decode 30 frames in each mode. It requires at least one accessible movie/episode and server permission to transcode. Credentials and playback URLs are not printed.
+To exercise a real server, provide a disposable account through environment variables. The checker authenticates, browses libraries, negotiates direct play and forced transcoding, and asks mpv to decode a short sample in each mode (up to 30 frames). It requires at least one accessible movie/episode and server permission to transcode. Credentials and playback URLs are not printed.
 
 ```sh
 export JF_SERVER='https://your-server.example'

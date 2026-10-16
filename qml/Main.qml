@@ -61,14 +61,8 @@ ApplicationWindow {
         function onBrowsingReady() { Qt.callLater(window.focusContent) }
         function onChanged() { if (!App.signedIn) Qt.callLater(() => serverField.forceActiveFocus()) }
     }
-    Connections {
-        target: Player
-        function onChanged() {
-            if (Player.active && !playback.activeFocus && !playbackButtons.activeFocus) playback.forceActiveFocus()
-        }
-    }
     Shortcut { sequence: "F1"; onActivated: { options.open(); Qt.callLater(() => modeSetting.forceActiveFocus()) } }
-    Shortcut { sequence: "F11"; onActivated: Preferences.fullscreen = !Preferences.fullscreen }
+    Shortcut { sequence: "F11"; onActivated: { Preferences.fullscreen = !Preferences.fullscreen; window.visibility = Preferences.fullscreen ? Window.FullScreen : Window.Windowed } }
     Shortcut { sequence: "PgUp"; onActivated: window.tab(-1) }
     Shortcut { sequence: "PgDown"; onActivated: window.tab(1) }
     Shortcut { sequence: "F"; onActivated: if (App.signedIn && !Player.active) { searchPopup.open(); searchField.forceActiveFocus() } }
@@ -279,7 +273,7 @@ ApplicationWindow {
                     }
                 }
             }
-            Timer { id: hideControls; interval: 4000; onTriggered: if (playback.activeFocus && !Player.paused) window.controlsVisible = false }
+            Timer { id: hideControls; interval: 4000; onTriggered: if (window.activeFocusItem === playback && !Player.paused) window.controlsVisible = false }
         }
     }
 

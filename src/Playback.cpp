@@ -15,6 +15,16 @@ bool Playback::sameOrigin(const QUrl &a, const QUrl &b) {
     auto port = [](const QUrl &u) { return u.port(u.scheme() == "https" ? 443 : 80); };
     return a.scheme() == b.scheme() && a.host() == b.host() && port(a) == port(b) && a.userInfo().isEmpty();
 }
+QUrl Playback::resourceUrl(const QUrl &server, const QUrl &resource) {
+    if (!resource.isRelative()) return resource;
+    QString base = server.path();
+    while (base.endsWith('/')) base.chop(1);
+    auto result = !base.isEmpty() && (resource.path() == base || resource.path().startsWith(base + '/'))
+        ? server.resolved(resource) : endpoint(server, resource.path());
+    result.setQuery(resource.query());
+    result.setFragment(resource.fragment());
+    return result;
+}
 QJsonObject Playback::deviceProfile(int bitrate) {
     return {{"Name", "JF Gamescope / libmpv"}, {"MaxStreamingBitrate", bitrate}, {"MaxStaticBitrate", 1000000000},
         {"DirectPlayProfiles", QJsonArray{QJsonObject{{"Type", "Video"},
@@ -69,12 +79,7 @@ Playback::Plan Playback::negotiate(const QJsonObject &response, const QUrl &serv
     } else {
         p.method = "Transcode";
         const QUrl relative(p.source.value("TranscodingUrl").toString());
-        p.url = relative.isRelative() ? server.resolved(relative) : relative;
-        // Jellyfin's root-relative URLs normally include its configured base path.
-        if (relative.isRelative() && !relative.path().startsWith('/')) {
-            p.url = endpoint(server, relative.path());
-            p.url.setQuery(relative.query());
-        }
+        p.url = resourceUrl(server, relative);
         p.offset = double(startTicks) / 10000000.0;
     }
     if (!sameOrigin(p.url, server)) { p.url = QUrl(); p.error = "The server returned a playback URL on a different origin."; return p; }

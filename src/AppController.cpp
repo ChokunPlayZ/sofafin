@@ -23,7 +23,7 @@ AppController::AppController(Settings *settings, MpvPlayer *player, QObject *par
             if (stream.value("Type").toString() != "Subtitle" || !stream.value("IsExternal").toBool()) continue;
             const QString delivery = stream.value("DeliveryUrl").toString();
             if (delivery.isEmpty()) continue;
-            auto url = m_api.server().resolved(QUrl(delivery));
+            auto url = Playback::resourceUrl(m_api.server(), QUrl(delivery));
             if (!Playback::sameOrigin(url, m_api.server())) continue;
             QUrlQuery q(url); q.removeAllQueryItems("api_key"); q.addQueryItem("api_key", m_api.token()); url.setQuery(q);
             m_player->addSubtitle(url);

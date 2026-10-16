@@ -4,6 +4,7 @@
 
 namespace Playback {
 QUrl endpoint(const QUrl &server, const QString &path);
+QUrl resourceUrl(const QUrl &server, const QUrl &resource);
 bool sameOrigin(const QUrl &a, const QUrl &b);
 QJsonObject deviceProfile(int bitrate);
 QJsonObject request(const QString &userId, const QString &mode, int bitrate, qint64 startTicks);
