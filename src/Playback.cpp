@@ -77,7 +77,7 @@ Playback::Plan Playback::negotiate(const QJsonObject &response, const QUrl &serv
         }
         p.offset = double(startTicks) / 10000000.0;
     }
-    if (!sameOrigin(p.url, server)) { p.url = {}; p.error = "The server returned a playback URL on a different origin."; return p; }
+    if (!sameOrigin(p.url, server)) { p.url = QUrl(); p.error = "The server returned a playback URL on a different origin."; return p; }
     QUrlQuery q(p.url);
     q.removeAllQueryItems("api_key");
     q.addQueryItem("api_key", token);
