@@ -23,7 +23,7 @@ MpvPlayer::MpvPlayer(QObject *parent, bool audioOnly) : QObject(parent), m_core(
     mpv_observe_property(h, 0, "paused-for-cache", MPV_FORMAT_FLAG);
     mpv_observe_property(h, 0, "demuxer-cache-time", MPV_FORMAT_DOUBLE);
     mpv_observe_property(h, 0, "cache-buffering-state", MPV_FORMAT_INT64);
-    mpv_observe_property(h, 0, "track-list", MPV_FORMAT_NONE);
+    mpv_observe_property(h, 0, "track-list", MPV_FORMAT_NODE);
     mpv_observe_property(h, 0, "aid", MPV_FORMAT_NONE);
     mpv_observe_property(h, 0, "sid", MPV_FORMAT_NONE);
     mpv_set_wakeup_callback(h, [](void *ctx) {
@@ -39,6 +39,8 @@ void MpvPlayer::command(std::initializer_list<QByteArray> args) {
     mpv_command_async(m_core->handle, 0, ptrs.data());
 }
 void MpvPlayer::load(const QUrl &url, double start, double offset, double duration, bool hwdec) {
+    ++m_trackGeneration; m_audioIds.clear(); m_subtitleIds.clear();
+    m_pendingAudio = m_pendingSubtitle = -3; m_audio = "Auto"; m_subtitle = "Off";
     m_pendingUrl = url; m_start = start; m_offset = offset;
     m_position = start; m_duration = duration; m_active = true; m_loading = true; m_paused = false;
     m_fileLoading = true; m_cacheLoading = false; m_buffered = 0; m_bufferPercent = 0;
@@ -70,6 +72,7 @@ void MpvPlayer::loadPending() {
 void MpvPlayer::rendererReady() { m_ready = true; loadPending(); }
 void MpvPlayer::rendererFailed() { m_ready = false; stop(); emit error("Could not initialize the OpenGL video renderer."); }
 void MpvPlayer::stop() {
+    ++m_trackGeneration; m_audioIds.clear(); m_subtitleIds.clear(); m_pendingAudio = m_pendingSubtitle = -3;
     m_pendingUrl = QUrl(); m_active = false; m_loading = false;
     m_fileLoading = m_cacheLoading = m_paused = false; m_buffered = 0; m_bufferPercent = 0;
     command({"stop"}); emit changed();
@@ -90,43 +93,42 @@ void MpvPlayer::cycleSubtitle() { command({"cycle", "sid"}); }
 void MpvPlayer::addSubtitle(const QUrl &url, bool select) { command({"sub-add", url.toEncoded(), select ? "select" : "auto"}); }
 void MpvPlayer::selectStream(int index, bool subtitle) {
     const QByteArray property = subtitle ? "sid" : "aid";
+    (subtitle ? m_pendingSubtitle : m_pendingAudio) = -3;
     if (index < 0) { command({"set", property, index == -1 ? "no" : "auto"}); return; }
-    mpv_node tracks{};
-    if (mpv_get_property(m_core->handle, "track-list", MPV_FORMAT_NODE, &tracks) < 0) return;
-    if (tracks.format == MPV_FORMAT_NODE_ARRAY) for (int i = 0; i < tracks.u.list->num; ++i) {
-        const auto &track = tracks.u.list->values[i];
-        if (track.format != MPV_FORMAT_NODE_MAP) continue;
-        QString type; qint64 id = -1, streamIndex = -1;
-        bool external = false;
-        for (int j = 0; j < track.u.list->num; ++j) {
-            const QByteArray key(track.u.list->keys[j]); const auto &v = track.u.list->values[j];
-            if (key == "type" && v.format == MPV_FORMAT_STRING) type = QString::fromUtf8(v.u.string);
-            if (key == "id" && v.format == MPV_FORMAT_INT64) id = v.u.int64;
-            if (key == "ff-index" && v.format == MPV_FORMAT_INT64) streamIndex = v.u.int64;
-            if (key == "external" && v.format == MPV_FORMAT_FLAG) external = v.u.flag;
-        }
-        if (!external && id >= 0 && streamIndex == index && type == (subtitle ? "sub" : "audio")) {
-            command({"set", property, QByteArray::number(id)}); break;
-        }
-    }
-    mpv_free_node_contents(&tracks);
+    (subtitle ? m_pendingSubtitle : m_pendingAudio) = index;
+    applyTrackSelections();
+    mpv_get_property_async(m_core->handle, m_trackGeneration, "track-list", MPV_FORMAT_NODE);
 }
-void MpvPlayer::updateTrackNames() {
-    auto *h = m_core->handle;
-    mpv_node tracks{};
-    if (mpv_get_property(h, "track-list", MPV_FORMAT_NODE, &tracks) < 0) return;
+void MpvPlayer::applyTrackSelections() {
+    if (m_fileLoading) return;
+    const auto apply = [this](int &index, const QHash<int, qint64> &ids, const QByteArray &property) {
+        if (index >= 0 && ids.contains(index)) { command({"set", property, QByteArray::number(ids.value(index))}); index = -3; }
+    };
+    apply(m_pendingAudio, m_audioIds, "aid"); apply(m_pendingSubtitle, m_subtitleIds, "sid");
+}
+void MpvPlayer::updateTracks(const mpv_node &tracks) {
+    if (m_fileLoading || !m_active) return;
+    m_audioIds.clear(); m_subtitleIds.clear();
     m_audio = "Auto"; m_subtitle = "Off";
     if (tracks.format == MPV_FORMAT_NODE_ARRAY) for (int i = 0; i < tracks.u.list->num; ++i) {
         const auto &track = tracks.u.list->values[i];
         if (track.format != MPV_FORMAT_NODE_MAP) continue;
-        QString type, title, lang; bool selected = false;
+        QString type, title, lang; bool selected = false, external = false;
+        qint64 id = -1, streamIndex = -1;
         for (int j = 0; j < track.u.list->num; ++j) {
             const QByteArray key(track.u.list->keys[j]); const auto &v = track.u.list->values[j];
             if (key == "selected" && v.format == MPV_FORMAT_FLAG) selected = v.u.flag;
+            if (key == "external" && v.format == MPV_FORMAT_FLAG) external = v.u.flag;
+            if (key == "id" && v.format == MPV_FORMAT_INT64) id = v.u.int64;
+            if (key == "ff-index" && v.format == MPV_FORMAT_INT64) streamIndex = v.u.int64;
             if (v.format != MPV_FORMAT_STRING) continue;
             if (key == "type") type = QString::fromUtf8(v.u.string);
             if (key == "title") title = QString::fromUtf8(v.u.string);
             if (key == "lang") lang = QString::fromUtf8(v.u.string);
+        }
+        if (!external && id >= 0 && streamIndex >= 0) {
+            if (type == "audio") m_audioIds.insert(int(streamIndex), id);
+            if (type == "sub") m_subtitleIds.insert(int(streamIndex), id);
         }
         if (selected) {
             const auto label = !title.isEmpty() ? title : !lang.isEmpty() ? lang.toUpper() : "Default";
@@ -134,13 +136,20 @@ void MpvPlayer::updateTrackNames() {
             if (type == "sub") m_subtitle = label;
         }
     }
-    mpv_free_node_contents(&tracks);
+    applyTrackSelections();
 }
 void MpvPlayer::drainEvents() {
     for (;;) {
         auto *event = mpv_wait_event(m_core->handle, 0);
         if (event->event_id == MPV_EVENT_NONE) break;
-        if (event->event_id == MPV_EVENT_FILE_LOADED) { m_fileLoading = false; m_loading = m_cacheLoading; emit loaded(); }
+        if (event->event_id == MPV_EVENT_FILE_LOADED) {
+            m_fileLoading = false; m_loading = m_cacheLoading; emit loaded();
+            mpv_get_property_async(m_core->handle, m_trackGeneration, "track-list", MPV_FORMAT_NODE);
+        }
+        if (event->event_id == MPV_EVENT_GET_PROPERTY_REPLY && event->reply_userdata == m_trackGeneration && event->error >= 0) {
+            const auto *p = static_cast<mpv_event_property *>(event->data);
+            if (p && p->data && p->format == MPV_FORMAT_NODE) updateTracks(*static_cast<mpv_node *>(p->data));
+        }
         if (event->event_id == MPV_EVENT_PROPERTY_CHANGE) {
             const auto *p = static_cast<mpv_event_property *>(event->data);
             const QByteArray name(p->name);
@@ -156,7 +165,8 @@ void MpvPlayer::drainEvents() {
                 if (name == "pause") m_paused = *static_cast<int *>(p->data);
                 if (name == "paused-for-cache") { m_cacheLoading = *static_cast<int *>(p->data); m_loading = m_active && (m_fileLoading || m_cacheLoading); }
             }
-            if (name == "track-list" || name == "aid" || name == "sid") updateTrackNames();
+            if (name == "track-list" && p->data && p->format == MPV_FORMAT_NODE) updateTracks(*static_cast<mpv_node *>(p->data));
+            if (name == "aid" || name == "sid") mpv_get_property_async(m_core->handle, m_trackGeneration, "track-list", MPV_FORMAT_NODE);
         }
         if (event->event_id == MPV_EVENT_END_FILE) {
             const auto *end = static_cast<mpv_event_end_file *>(event->data);

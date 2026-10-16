@@ -2,6 +2,7 @@
 #include <QObject>
 #include <QUrl>
 #include <memory>
+#include <QHash>
 #include <mpv/client.h>
 
 struct MpvCore {
@@ -54,7 +55,8 @@ private:
     void drainEvents();
     void loadPending();
     void command(std::initializer_list<QByteArray> args);
-    void updateTrackNames();
+    void updateTracks(const mpv_node &tracks);
+    void applyTrackSelections();
     std::shared_ptr<MpvCore> m_core;
     QUrl m_pendingUrl;
     double m_start = 0, m_position = 0, m_offset = 0, m_duration = 0, m_buffered = 0;
@@ -62,4 +64,8 @@ private:
     bool m_fileLoading = false, m_cacheLoading = false;
     bool m_active = false, m_paused = false, m_loading = false, m_ready = false;
     QString m_audio = "Auto", m_subtitle = "Off";
+    QHash<int, qint64> m_audioIds, m_subtitleIds;
+    // -3 means no deferred selection; Automatic (-2) and Off (-1) apply immediately.
+    int m_pendingAudio = -3, m_pendingSubtitle = -3;
+    quint64 m_trackGeneration = 1;
 };

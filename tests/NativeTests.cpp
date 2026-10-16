@@ -58,7 +58,7 @@ private slots:
     }
     void init() {
         m_settings = std::make_unique<Settings>(); m_settings->clearSession(); m_settings->setPlaybackMode("auto");
-        m_settings->setThemeSongVolume(70);
+        m_settings->setThemeSongVolume(70); m_settings->setUiScale(1.0);
         m_network = std::make_unique<FakeNetwork>();
         m_network->respond = [this](const FixtureRequest &request) {
             const auto path = request.request.url().path();
@@ -153,6 +153,11 @@ private slots:
         QTRY_VERIFY(QRectF(0, 0, scroll->width(), scroll->height()).contains(accent->mapRectToItem(scroll, accent->boundingRect())));
         const auto preview = qEnvironmentVariable("JF_SETTINGS_SCREENSHOT");
         if (!preview.isEmpty()) QVERIFY(m_window->grabWindow().save(preview));
+        auto *scale = qobject_cast<QQuickItem *>(object("uiScaleSetting")); QVERIFY(scale);
+        scale->forceActiveFocus();
+        for (int i = 0; i < 8; ++i) { QTest::keyClick(m_window, Qt::Key_Right); QTest::qWait(10); }
+        QCOMPARE(m_settings->uiScale(), 1.4);
+        QTRY_VERIFY(QRectF(0, 0, scroll->width(), scroll->height()).adjusted(-1, -1, 1, 1).contains(scale->mapRectToItem(scroll, scale->boundingRect())));
         QTest::keyClick(m_window, Qt::Key_Escape);
         QTRY_VERIFY(!object("optionsPopup")->property("visible").toBool());
     }
@@ -366,6 +371,10 @@ private slots:
             if (path.endsWith("AuthenticateByName")) return FixtureResponse{QJsonDocument(QJsonObject{{"AccessToken", "fixture-token"}, {"User", user}}).toJson()};
             if (path.endsWith("/Users/Me")) return FixtureResponse{QJsonDocument(user).toJson()};
             if (path.endsWith("/ThemeSongs")) return FixtureResponse{R"({"Items":[{"Id":"theme"}],"OwnerId":"series"})", 200, 40};
+            if (path.endsWith("/Items/episode") || path.endsWith("/Items/episode-2")) {
+                return FixtureResponse{QJsonDocument(QJsonObject{{"Id", path.section('/', -1)}, {"Name", "An episode"}, {"Type", "Episode"}, {"SeriesId", "series"}}).toJson()};
+            }
+            if (path.endsWith("/Items/series")) return FixtureResponse{R"({"Id":"series","Name":"A series","Type":"Series","IsFolder":true})"};
             return original(request);
         };
         auto *theme = m_app->findChild<MpvPlayer *>("themePlayer"); QVERIFY(theme);
@@ -388,6 +397,12 @@ private slots:
         QVERIFY(!m_player->active());
         double volume = 0; QCOMPARE(mpv_get_property(theme->core()->handle, "volume", MPV_FORMAT_DOUBLE, &volume), 0); QCOMPARE(volume, 70.0);
         const auto loads = loaded.size();
+        m_app->showDetails({{"id", "series"}, {"type", "Series"}});
+        QTRY_VERIFY(!m_app->detailLoading()); QTest::qWait(100);
+        QVERIFY(theme->active()); QCOMPARE(loaded.size(), loads);
+        m_app->showDetails({{"id", "episode-2"}, {"seriesId", "series"}});
+        QTRY_VERIFY(!m_app->detailLoading()); QTest::qWait(100);
+        QVERIFY(theme->active()); QCOMPARE(loaded.size(), loads);
         m_settings->setThemeSongVolume(90);
         QCOMPARE(mpv_get_property(theme->core()->handle, "volume", MPV_FORMAT_DOUBLE, &volume), 0); QCOMPARE(volume, 90.0);
         QTest::qWait(40); QVERIFY(theme->active()); QCOMPARE(loaded.size(), loads);
@@ -773,7 +788,11 @@ private slots:
         QVERIFY(!object("playerTrackPopup")->property("visible").toBool());
         QTRY_COMPARE(m_window->activeFocusItem(), view);
         QTest::keyClick(m_window, Qt::Key_Down);
+        QTRY_VERIFY(object("playerSeekBar")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Down);
         QTRY_VERIFY(object("playerPause")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Up);
+        QTRY_VERIFY(object("playerSeekBar")->property("activeFocus").toBool());
         QTest::keyClick(m_window, Qt::Key_Up);
         QTRY_VERIFY(!object("playerOverlay")->property("visible").toBool());
         QVERIFY(m_player->active());
@@ -794,6 +813,87 @@ private slots:
         QTest::keyClick(m_window, Qt::Key_Up);
         QTest::keyClick(m_window, Qt::Key_Escape);
         QTRY_VERIFY(!m_player->active());
+    }
+    void skeletonsTrackPendingCollectionsAndDetails() {
+        QVERIFY(signIn());
+        const auto original = m_network->respond;
+        m_network->respond = [original](const FixtureRequest &request) {
+            auto result = original(request); result.delay = 150; return result;
+        };
+        m_app->home();
+        QVERIFY(m_app->busy());
+        QVERIFY(m_app->shelves().first().toMap().value("loading").toBool());
+        auto *shelf = object("shelf-0"); QVERIFY(shelf);
+        QVERIFY(shelf->property("visible").toBool()); QVERIFY(shelf->property("loading").toBool());
+        QTRY_VERIFY(!m_app->busy());
+        QVERIFY(!m_app->shelves().first().toMap().value("loading").toBool());
+        const QVariant item = m_app->shelves().first().toMap().value("items").toList().first();
+        QVERIFY(QMetaObject::invokeMethod(m_window, "activate", Q_ARG(QVariant, item)));
+        QVERIFY(m_app->detailLoading()); QVERIFY(object("detailLoadingSkeleton")->property("visible").toBool());
+        QTRY_VERIFY(!m_app->detailLoading());
+        QVERIFY(!object("detailLoadingSkeleton")->property("visible").toBool());
+    }
+    void restoredAuthenticationHidesLoginUntilResolved() {
+        const auto original = m_network->respond;
+        m_network->respond = [original](const FixtureRequest &request) {
+            if (request.request.url().path().endsWith("/Users/Me"))
+                return FixtureResponse{R"({"Id":"user","Name":"Fixture"})", 200, 120};
+            return original(request);
+        };
+        m_settings->put("server", "https://fixture.invalid/base");
+        m_settings->put("accessToken", "fixture-token"); m_settings->put("userId", "user");
+        m_app->start(); QVERIFY(m_app->authenticating());
+        QVERIFY(!object("loginScreen")->property("visible").toBool());
+        QVERIFY(object("authLoadingScreen")->property("visible").toBool());
+        QTRY_VERIFY(m_app->signedIn() && !m_app->authenticating());
+        QVERIFY(!object("loginScreen")->property("visible").toBool());
+        QVERIFY(!object("authLoadingScreen")->property("visible").toBool());
+        m_app->logout();
+        m_network->respond = [original](const FixtureRequest &request) {
+            if (request.request.url().path().endsWith("/Users/Me")) return FixtureResponse{"{}", 401, 80};
+            return original(request);
+        };
+        m_settings->put("accessToken", "expired"); m_settings->put("userId", "user");
+        m_app->start(); QVERIFY(m_app->authenticating());
+        QTRY_VERIFY(!m_app->authenticating());
+        QVERIFY(!m_app->signedIn()); QVERIFY(object("loginScreen")->property("visible").toBool());
+    }
+    void analogTimelinePreviewsAcceleratesAndCommitsOnce() {
+        QVERIFY(signIn()); m_window->resize(1920, 1080);
+        const int index = SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_GAMECONTROLLER, SDL_CONTROLLER_AXIS_MAX, SDL_CONTROLLER_BUTTON_MAX, 0);
+        QVERIFY(index >= 0); auto *stick = SDL_JoystickOpen(index); QVERIFY(stick);
+        QTRY_VERIFY(m_input->name() != "Keyboard");
+        auto item = m_app->shelves().first().toMap()["items"].toList().first().toMap();
+        item["trickplay"] = QVariantMap{{"source", QVariantMap{{"320", QVariantMap{{"Width", 320}, {"Height", 180}, {"TileWidth", 10}, {"TileHeight", 10}, {"ThumbnailCount", 720}, {"Interval", 10000}}}}}};
+        m_app->play(item, false, {{"quality", 8000000}}); QTRY_VERIFY(m_player->active());
+        auto *view = qobject_cast<QQuickItem *>(object("playbackView")); view->forceActiveFocus();
+        QTest::keyClick(m_window, Qt::Key_Down);
+        auto *bar = object("playerSeekBar"); QVERIFY(bar);
+        QTRY_VERIFY(bar->property("activeFocus").toBool()); QVERIFY(m_input->timelineMode());
+        const auto requestsBefore = m_network->requests.size();
+        SDL_JoystickSetVirtualAxis(stick, SDL_CONTROLLER_AXIS_LEFTX, 12000);
+        QTRY_VERIFY(bar->property("previewPosition").toDouble() > 1);
+        const auto slowSpeed = bar->property("speed").toDouble();
+        SDL_JoystickSetVirtualAxis(stick, SDL_CONTROLLER_AXIS_LEFTX, 30000);
+        QTRY_VERIFY(bar->property("speed").toDouble() > slowSpeed * 3);
+        const auto fastSpeed = bar->property("speed").toDouble();
+        QTest::qWait(350); QVERIFY(bar->property("speed").toDouble() > fastSpeed);
+        SDL_JoystickSetVirtualAxis(stick, SDL_CONTROLLER_AXIS_LEFTX, 0); QTest::qWait(60);
+        const auto target = bar->property("previewPosition").toDouble(); QTest::qWait(100);
+        QCOMPARE(bar->property("previewPosition").toDouble(), target);
+        QCOMPARE(m_network->requests.size(), requestsBefore); // No stream restarts while previewing.
+        const auto frame = m_app->trickplayFrame(1015);
+        QCOMPARE(frame.value("row").toInt(), 0); QCOMPARE(frame.value("column").toInt(), 1);
+        QVERIFY(QUrl(frame.value("url").toString()).path().endsWith("/Trickplay/320/1.jpg"));
+        QTest::keyClick(m_window, Qt::Key_Return); QTRY_VERIFY(!m_app->playbackPending());
+        QVERIFY(qAbs(m_player->position() - target) < 0.001);
+        QVERIFY(!bar->property("seeking").toBool());
+        QTest::keyClick(m_window, Qt::Key_Left); QVERIFY(bar->property("seeking").toBool());
+        QTest::keyClick(m_window, Qt::Key_Escape); QVERIFY(!bar->property("seeking").toBool());
+        QVERIFY(qAbs(m_player->position() - target) < 0.001);
+        QTest::keyClick(m_window, Qt::Key_Down); QVERIFY(!m_input->timelineMode());
+        SDL_JoystickClose(stick); SDL_JoystickDetachVirtual(index);
+        m_app->stopPlayback();
     }
     void embeddedMpvDecodesPausesAndResumes() {
         m_engine.reset();

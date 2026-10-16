@@ -126,9 +126,16 @@ FocusScope {
             Text { Layout.fillWidth: true; Layout.maximumWidth: 726; text: [page.media.rating || "", page.media.communityRating ? "★ " + page.media.communityRating.toFixed(1) : "", (page.media.genres || []).join(" · ")].filter(Boolean).join("   "); color: "#c3d4df"; font.pixelSize: 13; wrapMode: Text.Wrap; visible: text.length > 0 }
             Text { Layout.fillWidth: true; Layout.maximumWidth: 726; text: page.media.tagline || ""; visible: text.length > 0; color: "#c3d4df"; font.pixelSize: 15; font.italic: true; wrapMode: Text.Wrap }
             Text { Layout.fillWidth: true; Layout.maximumWidth: 726; text: page.media.overview || ""; visible: text.length > 0; wrapMode: Text.Wrap; color: "#afc5d5"; font.pixelSize: 16; lineHeight: 1.25 }
-            BusyIndicator { running: App.detailLoading; visible: running; implicitWidth: 32; implicitHeight: 32 }
+            Column {
+                Layout.fillWidth: true; Layout.maximumWidth: 726; spacing: 12; visible: App.detailLoading; objectName: "detailLoadingSkeleton"
+                SkeletonBlock { width: parent.width; height: 16 }
+                SkeletonBlock { width: parent.width * 0.9; height: 16 }
+                SkeletonBlock { width: parent.width * 0.65; height: 16 }
+                SkeletonBlock { width: 220; height: 52 }
+            }
             NavButton {
                 id: primaryAction
+                visible: !App.detailLoading
                 objectName: "playButton"
                 Layout.preferredWidth: 220; Layout.minimumWidth: 0; implicitHeight: 52
                 text: page.media.folder ? (page.media.type === "Series" ? "Episodes" : "Browse") : App.busy ? "Preparing…" : page.media.progress > 0 ? "Resume" : "Play"
@@ -247,7 +254,7 @@ FocusScope {
                     onClicked: { const item = Object.assign({}, page.media); item.positionTicks = modelData.ticks; const selection = playbackOptions.selection; page.close(); App.play(item, true, selection) }
                 }
             }
-            BusyIndicator { running: !!page.media.seasonsLoading; visible: running; implicitWidth: 32; implicitHeight: 32 }
+            SkeletonShelf { Layout.fillWidth: true; visible: !!page.media.seasonsLoading && !(page.media.seasons || []).length; cardWidth: 263; cardHeight: 148 }
             Text {
                 Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#afc5d5"; font.pixelSize: 16
                 visible: page.media.type === "Series" && !App.detailLoading && !page.media.seasonsLoading && !(page.media.seasons || []).length
@@ -266,8 +273,8 @@ FocusScope {
                         id: episodeShelf
                         objectName: "seasonShelf-" + index
                         Layout.fillWidth: true; Layout.minimumWidth: 0
-                        title: modelData.title; items: modelData.items; accent: page.accent
-                        cardWidth: 156 * Preferences.uiScale; cardHeight: 148 * Preferences.uiScale
+                        title: modelData.title; items: modelData.items; loading: !!modelData.loading; accent: page.accent
+                        cardWidth: 156; cardHeight: 148
                         initialIndex: page.selectedEpisodes[modelData.id] || 0
                         activeFocusOnTab: true
                         loadArtwork: page.visible && y + parent.y + height >= detailScroll.contentY && y + parent.y <= detailScroll.contentY + detailScroll.height

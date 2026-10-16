@@ -9,6 +9,7 @@ FocusScope {
     property real cardWidth: 156
     property real cardHeight: 226
     property int initialIndex: 0
+    property bool loading: false
     property bool loadArtwork: true
     readonly property int itemIndex: list.currentIndex
     signal activated(var media)
@@ -16,12 +17,14 @@ FocusScope {
     signal moveUp()
     signal moveDown()
     implicitHeight: cardHeight + 89
-    visible: items.length > 0
-    function focusFirst() { list.forceActiveFocus(); announce() }
+    visible: loading || items.length > 0
+    function focusFirst() { if (!loading && items.length) { list.forceActiveFocus(); announce() } }
     function announce() { if (items.length && list.currentIndex >= 0) selected(items[list.currentIndex], list.currentIndex) }
-    Text { text: shelf.title; color: "#e5eef6"; font.pixelSize: 22; font.weight: Font.DemiBold }
+    SkeletonShelf { anchors.fill: parent; visible: shelf.loading; cardWidth: shelf.cardWidth; cardHeight: shelf.cardHeight }
+    Text { visible: !shelf.loading; text: shelf.title; color: "#e5eef6"; font.pixelSize: 22; font.weight: Font.DemiBold }
     ListView {
         id: list
+        visible: !shelf.loading
         anchors { left: parent.left; right: parent.right; top: parent.top; topMargin: 39; bottom: parent.bottom }
         orientation: ListView.Horizontal
         spacing: 18

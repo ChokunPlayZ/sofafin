@@ -11,6 +11,8 @@ ApplicationWindow {
     title: "JF Gamescope"
     color: "#101c29"
     readonly property color accent: Preferences.accent
+    readonly property real uiFactor: Math.max(1, Math.min(width / 1280, height / 720)) * Preferences.uiScale
+    onUiFactorChanged: Qt.callLater(() => { if (options.opened && uiScaleSetting.activeFocus) options.reveal(uiScaleSetting) })
     readonly property bool gamepad: Controller.name !== "Keyboard"
     property var selectedMedia: ({})
     property var selectedIndices: ({})
@@ -34,14 +36,14 @@ ApplicationWindow {
         if (libraryGrid.visible) { libraryGrid.focusFirst(); return }
         for (let i = 0; i < shelves.count; ++i) {
             let shelf = shelves.itemAt(i)
-            if (shelf && shelf.visible) { shelf.focusFirst(); return }
+            if (shelf && shelf.visible && !shelf.loading) { shelf.focusFirst(); return }
         }
         homeButton.forceActiveFocus()
     }
     function focusShelf(index, direction) {
         for (let i = index + direction; i >= 0 && i < shelves.count; i += direction) {
             let shelf = shelves.itemAt(i)
-            if (shelf.visible) {
+            if (shelf.visible && !shelf.loading) {
                 shelf.focusFirst()
                 mediaFlick.contentY = Math.max(0, Math.min(mediaFlick.contentHeight - mediaFlick.height, shelf.y - 12))
                 return
@@ -73,7 +75,7 @@ ApplicationWindow {
     Connections {
         target: App
         function onBrowsingReady() { if (!Player.active && !App.playbackPending) Qt.callLater(window.focusContent) }
-        function onChanged() { if (!App.signedIn) { detailView.close(); Qt.callLater(() => serverField.forceActiveFocus()) } else if (App.title === "Home") window.activeTab = 0 }
+        function onChanged() { if (!App.signedIn) { detailView.close(); if (!App.authenticating) Qt.callLater(() => serverField.forceActiveFocus()) } else if (App.title === "Home") window.activeTab = 0 }
     }
     Connections {
         target: Controller
@@ -86,9 +88,14 @@ ApplicationWindow {
     Shortcut { sequence: "PgDown"; onActivated: window.tab(1) }
     Shortcut { sequence: "F"; onActivated: if (App.signedIn && !Player.active && !App.playbackPending && !detailView.opened) { searchPopup.open(); searchField.forceActiveFocus() } }
 
+    Overlay.overlay.transform: Scale { xScale: window.uiFactor; yScale: window.uiFactor }
+    Overlay.overlay.width: stage.width
+    Overlay.overlay.height: stage.height
+
     FocusScope {
         id: stage
-        anchors.fill: parent
+        width: window.width / window.uiFactor; height: window.height / window.uiFactor
+        scale: window.uiFactor; transformOrigin: Item.TopLeft
         focus: true
         Keys.onEscapePressed: {
             if (Player.active || App.playbackPending) playback.back()
@@ -102,7 +109,8 @@ ApplicationWindow {
         Item {
             id: loginScreen
             anchors.fill: parent
-            visible: !App.signedIn && !Player.active && !App.playbackPending
+            objectName: "loginScreen"
+            visible: !App.authenticating && !App.signedIn && !Player.active && !App.playbackPending
             IconButton {
                 id: optionsButton
                 anchors { right: parent.right; top: parent.top; margins: 24 }
@@ -152,7 +160,7 @@ ApplicationWindow {
                     KeyNavigation.up: usernameField; KeyNavigation.down: rememberButton
                 }
                 NavButton { id: rememberButton; objectName: "rememberButton"; Layout.fillWidth: true; text: (checked ? "✓" : "○") + "  Keep me signed in"; checkable: true; flat: true; upTarget: passwordField; downTarget: signIn; implicitHeight: 38; font.pixelSize: 13 }
-                NavButton { id: signIn; text: App.busy ? "Connecting…" : "Sign in"; primary: true; accent: window.accent; Layout.fillWidth: true; implicitHeight: 52; upTarget: rememberButton; downTarget: optionsButton; enabled: !App.busy; onClicked: { App.login(serverField.text, usernameField.text, passwordField.text, rememberButton.checked); passwordField.clear() } }
+                NavButton { id: signIn; objectName: "signInButton"; text: App.busy ? "Connecting…" : "Sign in"; primary: true; accent: window.accent; Layout.fillWidth: true; implicitHeight: 52; upTarget: rememberButton; downTarget: optionsButton; enabled: !App.busy; onClicked: { App.login(serverField.text, usernameField.text, passwordField.text, rememberButton.checked); passwordField.clear() } }
             }
         }
 
@@ -196,15 +204,15 @@ ApplicationWindow {
             }
             Column {
                 visible: !App.canFilter
-                x: 42; y: 116; spacing: 10; width: parent.width - 84
-                Text { width: parent.width; text: window.selectedMedia.title || ""; color: "#f5f8fb"; font.pixelSize: Math.min(42, window.width * 0.034); font.weight: Font.Bold; elide: Text.ElideRight }
+                x: 42; y: stage.height < 620 ? 92 : 116; spacing: 10; width: parent.width - 84
+                Text { width: parent.width; text: window.selectedMedia.title || ""; color: "#f5f8fb"; font.pixelSize: Math.min(stage.height < 620 ? 28 : 42, stage.width * 0.034); font.weight: Font.Bold; elide: Text.ElideRight }
                 Text { width: parent.width; elide: Text.ElideRight; text: window.selectedMedia.subtitle || ""; color: "#9db4c6"; font.pixelSize: 14 }
-                Text { width: Math.min(parent.width * 0.65, 730); text: window.selectedMedia.overview || ""; color: "#a9bdcb"; font.pixelSize: 14; maximumLineCount: 2; elide: Text.ElideRight; wrapMode: Text.WordWrap; lineHeight: 1.25 }
+                Text { visible: stage.height >= 620; width: Math.min(parent.width * 0.65, 730); text: window.selectedMedia.overview || ""; color: "#a9bdcb"; font.pixelSize: 14; maximumLineCount: 2; elide: Text.ElideRight; wrapMode: Text.WordWrap; lineHeight: 1.25 }
             }
             Flickable {
                 id: mediaFlick
                 objectName: "mediaFlick"
-                anchors { left: parent.left; right: parent.right; top: parent.top; bottom: footer.top; leftMargin: 42; rightMargin: 42; topMargin: App.canFilter ? 116 : 260 }
+                anchors { left: parent.left; right: parent.right; top: parent.top; bottom: footer.top; leftMargin: 42; rightMargin: 42; topMargin: App.canFilter ? 116 : Math.min(260, stage.height * 0.36) }
                 clip: true; contentHeight: shelfColumn.height + 15; boundsBehavior: Flickable.StopAtBounds
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                 Column {
@@ -224,9 +232,9 @@ ApplicationWindow {
                             required property int index
                             objectName: "shelf-" + index
                             width: shelfColumn.width
-                            title: modelData.title; items: modelData.items; accent: window.accent
+                            title: modelData.title; items: modelData.items; loading: !!modelData.loading; accent: window.accent
                             initialIndex: window.selectedIndices[modelData.title] || 0
-                            cardWidth: 156 * Preferences.uiScale; cardHeight: 226 * Preferences.uiScale
+                            cardWidth: 156; cardHeight: Math.min(226, Math.max(100, mediaFlick.height - 89))
                             loadArtwork: libraryScreen.visible && y + shelfColumn.y + height >= mediaFlick.contentY && y + shelfColumn.y <= mediaFlick.contentY + mediaFlick.height
                             onSelected: (media, selectedIndex) => { window.selectedMedia = media; window.selectedIndices[title] = selectedIndex }
                             onActivated: media => window.activate(media)
@@ -239,7 +247,7 @@ ApplicationWindow {
                         objectName: "libraryGrid"
                         width: shelfColumn.width - 14
                         title: App.title; items: App.canFilter && App.shelves.length ? App.shelves[0].items : []
-                        accent: window.accent; preferredCardWidth: 156 * Preferences.uiScale
+                        accent: window.accent; preferredCardWidth: 156
                         loadArtwork: libraryScreen.visible
                         viewportTop: mediaFlick.contentY - y; viewportHeight: mediaFlick.height
                         onSelected: (media, selectedIndex) => { window.selectedMedia = media; window.selectedIndices[title] = selectedIndex }
@@ -261,13 +269,24 @@ ApplicationWindow {
                         onClicked: App.loadMore()
                     }
                     Text { visible: !App.busy && App.shelves.every(s => s.items.length === 0); text: "No titles"; color: "#94adbf"; font.pixelSize: 18; topPadding: 30 }
-                    BusyIndicator { running: App.busy; visible: running; width: 40; height: 40 }
+                    SkeletonShelf { width: shelfColumn.width; visible: App.canFilter && App.busy; grid: true }
                 }
             }
             Rectangle {
                 id: footer
                 anchors { left: parent.left; right: parent.right; bottom: parent.bottom } height: 40; color: "transparent"
                 Text { anchors { left: parent.left; verticalCenter: parent.verticalCenter; leftMargin: 42 } text: window.gamepad ? "A  Select     B  " + (App.title === "Home" ? "Exit" : "Back") + "     Y  Search     LB / RB  Browse     ☰  Settings" : "Enter  Select     Esc  " + (App.title === "Home" ? "Exit" : "Back") + "     F  Search     F1  Settings"; color: "#93aebf"; font.pixelSize: 12 }
+            }
+        }
+
+        Rectangle {
+            objectName: "authLoadingScreen"
+            anchors.fill: parent; color: "#101c29"; visible: App.authenticating
+            Column {
+                anchors.centerIn: parent; spacing: 22
+                Image { source: "qrc:/assets/logo.svg"; width: 64; height: 64; anchors.horizontalCenter: parent.horizontalCenter }
+                Text { text: "Connecting to Jellyfin…"; color: "#eff6fc"; font.pixelSize: 24 }
+                BusyIndicator { running: parent.parent.visible; width: 48; height: 48; anchors.horizontalCenter: parent.horizontalCenter }
             }
         }
 
@@ -288,7 +307,7 @@ ApplicationWindow {
 
     Popup {
         id: searchPopup
-        parent: Overlay.overlay; width: Math.min(650, window.width - 50); height: 114; x: (window.width - width) / 2; y: (window.height - height) / 2; modal: true; focus: true; padding: 28
+        parent: Overlay.overlay; width: Math.min(650, stage.width - 50); height: 114; x: (stage.width - width) / 2; y: (stage.height - height) / 2; modal: true; focus: true; padding: 28
         background: Rectangle { color: "#152a3c"; radius: 8; border.color: "#36536a" }
         contentItem: RowLayout {
             spacing: 12
@@ -306,7 +325,7 @@ ApplicationWindow {
     Popup {
         id: options
         objectName: "optionsPopup"
-        parent: Overlay.overlay; width: Math.min(620, window.width - 50); height: Math.min(610, window.height - 50); x: (window.width - width) / 2; y: (window.height - height) / 2; modal: true; focus: true; padding: 24
+        parent: Overlay.overlay; width: Math.min(620, stage.width - 50); height: Math.min(610, stage.height - 50); x: (stage.width - width) / 2; y: (stage.height - height) / 2; modal: true; focus: true; padding: 24
         function reveal(item) {
             const point = item.mapToItem(settingsColumn, 0, 0)
             if (point.y < settingsScroll.contentY) settingsScroll.contentY = point.y
@@ -368,7 +387,7 @@ ApplicationWindow {
                         }
                     }
                     NavButton { id: fullscreenSetting; Layout.fillWidth: true; text: "Fullscreen"; value: Preferences.fullscreen ? "On" : "Off"; flat: true; onActiveFocusChanged: if (activeFocus) options.reveal(this); onClicked: { Preferences.fullscreen = !Preferences.fullscreen; window.visibility = Preferences.fullscreen ? Window.FullScreen : Window.Windowed } }
-                    NavButton { Layout.fillWidth: true; text: "Poster size"; value: Math.round(Preferences.uiScale * 100) + "%"; flat: true; onActiveFocusChanged: if (activeFocus) options.reveal(this); onClicked: Preferences.uiScale = Preferences.uiScale >= 1.24 ? 0.85 : Math.min(1.25, Preferences.uiScale + 0.1) }
+                    NavButton { Layout.fillWidth: true; id: uiScaleSetting; objectName: "uiScaleSetting"; text: "UI scale"; value: Math.round(Preferences.uiScale * 100) + "%"; flat: true; onActiveFocusChanged: if (activeFocus) options.reveal(this); Keys.onLeftPressed: Preferences.uiScale = Math.max(0.75, Math.round((Preferences.uiScale - 0.05) * 100) / 100); Keys.onRightPressed: Preferences.uiScale = Math.min(1.5, Math.round((Preferences.uiScale + 0.05) * 100) / 100); onClicked: Preferences.uiScale = Preferences.uiScale >= 1.49 ? 0.75 : Math.round((Preferences.uiScale + 0.05) * 100) / 100 }
                     NavButton { objectName: "accentSetting"; Layout.fillWidth: true; text: "Accent"; value: ({"#66c0f4": "Steam blue", "#76dfba": "Sea glass", "#f3bb70": "Warm amber"})[Preferences.accent]; flat: true; onActiveFocusChanged: if (activeFocus) options.reveal(this); onClicked: { let colors = ["#66c0f4", "#76dfba", "#f3bb70"]; Preferences.accent = colors[(colors.indexOf(Preferences.accent) + 1) % 3] } }
                     Text { Layout.fillWidth: true; text: "Streaming changes apply to the next video."; color: "#8eacbf"; font.pixelSize: 12; wrapMode: Text.WordWrap; topPadding: 8 }
                 }
@@ -385,8 +404,8 @@ ApplicationWindow {
         id: exitPrompt
         objectName: "exitPrompt"
         parent: Overlay.overlay
-        width: Math.min(440, window.width - 48); height: 180
-        x: (window.width - width) / 2; y: (window.height - height) / 2
+        width: Math.min(440, stage.width - 48); height: 180
+        x: (stage.width - width) / 2; y: (stage.height - height) / 2
         modal: true; focus: true; padding: 24; closePolicy: Popup.CloseOnEscape
         onOpened: cancelExit.forceActiveFocus()
         onClosed: if (App.signedIn) window.focusContent(); else serverField.forceActiveFocus()
@@ -403,7 +422,7 @@ ApplicationWindow {
     }
     Popup {
         id: notification
-        parent: Overlay.overlay; width: Math.min(700, window.width - 50); height: messageColumn.implicitHeight + 48; x: (window.width - width) / 2; y: 30; modal: true; focus: true; padding: 24
+        parent: Overlay.overlay; width: Math.min(700, stage.width - 50); height: messageColumn.implicitHeight + 48; x: (stage.width - width) / 2; y: 30; modal: true; focus: true; padding: 24
         visible: App.message.length > 0
         closePolicy: Popup.CloseOnEscape
         onClosed: { App.clearMessage(); window.focusContent() }
@@ -415,5 +434,5 @@ ApplicationWindow {
             NavButton { id: dismissMessage; text: "Dismiss"; accent: window.accent; onClicked: notification.close() }
         }
     }
-    Component.onCompleted: serverField.forceActiveFocus()
+    Component.onCompleted: if (!App.authenticating) serverField.forceActiveFocus()
 }

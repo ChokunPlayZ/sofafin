@@ -73,7 +73,7 @@ FocusScope {
             if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) Player.togglePause()
             else if (event.key === Qt.Key_Left) App.seekRelative(-10)
             else if (event.key === Qt.Key_Right) App.seekRelative(10)
-            else if (event.key === Qt.Key_Down) { if (skipButton.visible) skipButton.forceActiveFocus(); else pauseButton.forceActiveFocus() }
+            else if (event.key === Qt.Key_Down) { if (skipButton.visible) skipButton.forceActiveFocus(); else seekBar.forceActiveFocus() }
             else if (event.key === Qt.Key_I) infoPopup.open()
             else return
         }
@@ -81,7 +81,14 @@ FocusScope {
     }
     Shortcut { sequence: "Space"; enabled: playback.visible && playback.activeFocus; onActivated: { playback.activity(); Player.togglePause() } }
     Rectangle { anchors.fill: parent; color: "black" }
-    MpvVideo { anchors.fill: parent; player: Player; visible: Player.active }
+    // Keep the video framebuffer at display resolution when the UI is scaled.
+    MpvVideo {
+        objectName: "videoSurface"
+        readonly property real uiFactor: playback.Window.window ? playback.Window.window.uiFactor : 1
+        width: playback.width * uiFactor; height: playback.height * uiFactor
+        scale: 1 / uiFactor; transformOrigin: Item.TopLeft
+        player: Player; visible: Player.active
+    }
     MouseArea {
         anchors.fill: parent; hoverEnabled: true
         onPositionChanged: playback.activity()
@@ -104,7 +111,7 @@ FocusScope {
             spacing: 14
             Text { text: "Paused"; color: "#b8bdc5"; font.pixelSize: 17 }
             Text { width: parent.width; text: playback.heading; color: "white"; font.pixelSize: Math.min(46, playback.width * 0.045); font.weight: Font.Bold; wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight }
-            Text { width: parent.width; text: playback.episode; visible: text.length > 0; color: "#d6dae0"; font.pixelSize: 20; wrapMode: Text.Wrap }
+            Text { width: parent.width; text: playback.episode; visible: text.length > 0 && !seekBar.seeking; color: "#d6dae0"; font.pixelSize: 20; wrapMode: Text.Wrap }
             Text { width: Math.min(parent.width, 720); text: playback.media.overview || ""; visible: text.length > 0; color: "#adb4bf"; font.pixelSize: 16; maximumLineCount: 3; elide: Text.ElideRight; wrapMode: Text.Wrap }
             Text { text: playback.time(Player.position) + " / " + playback.time(Player.duration); color: "#adb4bf"; font.pixelSize: 14 }
         }
@@ -120,26 +127,29 @@ FocusScope {
             id: overlayColumn
             anchors { left: parent.left; right: parent.right; bottom: parent.bottom; margins: 28 }
             spacing: 10
-            Text { objectName: "playerTitle"; Layout.fillWidth: true; text: playback.heading; color: "white"; font.pixelSize: 25; font.weight: Font.DemiBold; elide: Text.ElideRight }
-            Text { objectName: "playerEpisode"; Layout.fillWidth: true; text: playback.episode; visible: text.length > 0; color: "#c3cbd4"; font.pixelSize: 16; elide: Text.ElideRight }
-            Rectangle {
-                Layout.fillWidth: true; implicitHeight: 5; color: "#454b53"
-                Rectangle { objectName: "bufferProgress"; height: parent.height; width: parent.width * Math.min(1, Player.duration > 0 ? Player.bufferedPosition / Player.duration : 0); color: "#9ba8b4" }
-                Rectangle { height: parent.height; width: parent.width * Math.min(1, Player.duration > 0 ? Player.position / Player.duration : 0); color: playback.accent }
-                MouseArea { anchors.fill: parent; anchors.margins: -9; onClicked: mouse => { playback.activity(); App.seekRelative(Math.max(0, Math.min(1, (mouse.x - 9) / (width - 18))) * Player.duration - Player.position) } }
+            Text { objectName: "playerTitle"; visible: !seekBar.seeking; Layout.fillWidth: true; text: playback.heading; color: "white"; font.pixelSize: 25; font.weight: Font.DemiBold; elide: Text.ElideRight }
+            Text { objectName: "playerEpisode"; Layout.fillWidth: true; text: playback.episode; visible: text.length > 0 && !seekBar.seeking; color: "#c3cbd4"; font.pixelSize: 16; elide: Text.ElideRight }
+            SeekBar {
+                id: seekBar
+                z: 2
+                Layout.fillWidth: true
+                accent: playback.accent
+                onActivity: playback.activity()
+                onMoveUp: playback.hideOverlay()
+                onMoveDown: pauseButton.forceActiveFocus()
             }
             RowLayout {
                 Layout.fillWidth: true
-                Text { text: (Player.paused ? "Paused · " : "") + playback.time(Player.position) + " / " + playback.time(Player.duration); color: "#c3d7e4"; font.pixelSize: 14 }
+                Text { text: (seekBar.seeking ? "Seek to " : Player.paused ? "Paused · " : "") + playback.time(seekBar.position) + " / " + playback.time(Player.duration); color: "#c3d7e4"; font.pixelSize: 14 }
                 Item { Layout.fillWidth: true }
                 Text { objectName: "endingTime"; visible: playback.endingTime.length > 0; text: "Ends at " + playback.endingTime; color: "#c3d7e4"; font.pixelSize: 14 }
             }
             RowLayout {
                 Layout.fillWidth: true; spacing: 8
-                NavButton { id: pauseButton; objectName: "playerPause"; text: Player.paused ? "Resume" : "Pause"; primary: true; accent: playback.accent; implicitWidth: 120; upTarget: playback; onNavigatedUp: playback.hideOverlay(); onClicked: { playback.activity(); Player.togglePause() } }
+                NavButton { id: pauseButton; objectName: "playerPause"; text: Player.paused ? "Resume" : "Pause"; primary: true; accent: playback.accent; implicitWidth: 120; upTarget: seekBar; onClicked: { playback.activity(); Player.togglePause() } }
                 Item { Layout.fillWidth: true }
-                NavButton { objectName: "playerSettings"; text: "Playback settings"; flat: true; upTarget: playback; onNavigatedUp: playback.hideOverlay(); onClicked: playback.settings("quality") }
-                NavButton { text: "Stop"; flat: true; implicitWidth: 90; upTarget: playback; onNavigatedUp: playback.hideOverlay(); onClicked: App.stopPlayback() }
+                NavButton { objectName: "playerSettings"; text: "Playback settings"; flat: true; upTarget: seekBar; onClicked: playback.settings("quality") }
+                NavButton { text: "Stop"; flat: true; implicitWidth: 90; upTarget: seekBar; onClicked: App.stopPlayback() }
             }
         }
     }
@@ -150,13 +160,13 @@ FocusScope {
         visible: !!playback.segment.type && !playback.pauseScreenVisible
         text: "Skip " + ({Intro: "intro", Outro: "credits", Recap: "recap", Preview: "preview", Commercial: "commercial"})[playback.segment.type]
         primary: true; accent: playback.accent
-        upTarget: playback; downTarget: pauseButton
+        upTarget: playback; downTarget: seekBar
         onNavigatedUp: playback.hideOverlay()
         onClicked: { playback.activity(); App.skipSegment(); playback.focusVideo() }
         onVisibleChanged: if (!visible && activeFocus) playback.focusVideo()
     }
     Timer { id: hideControls; interval: 4000; onTriggered: if (playback.Window.window.activeFocusItem === playback && !trackPopup.visible && !infoPopup.visible && !Player.paused) playback.controlsVisible = false }
-    Timer { id: pauseDelay; objectName: "pauseScreenTimer"; interval: 10000; onTriggered: if (playback.isPaused && playback.activeFocus && !trackPopup.visible && !infoPopup.visible) { playback.controlsVisible = false; playback.pauseScreenVisible = true; playback.focusVideo() } }
+    Timer { id: pauseDelay; objectName: "pauseScreenTimer"; interval: 10000; onTriggered: if (playback.isPaused && playback.Window.window.activeFocusItem === playback && !trackPopup.visible && !infoPopup.visible) { playback.controlsVisible = false; playback.pauseScreenVisible = true; playback.focusVideo() } }
     Timer { interval: 1000; repeat: true; running: playback.visible; onTriggered: playback.clockTime = new Date() }
     Popup {
         id: trackPopup
