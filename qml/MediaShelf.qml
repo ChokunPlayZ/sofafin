@@ -8,6 +8,8 @@ FocusScope {
     property color accent: "#66c0f4"
     property real cardWidth: 156
     property real cardHeight: 226
+    property int initialIndex: 0
+    readonly property int itemIndex: list.currentIndex
     signal activated(var media)
     signal selected(var media)
     signal moveUp()
@@ -25,7 +27,7 @@ FocusScope {
         spacing: 18
         clip: true
         model: shelf.items
-        currentIndex: 0
+        currentIndex: Math.min(shelf.initialIndex, Math.max(0, count - 1))
         focus: true
         keyNavigationEnabled: false
         highlightMoveDuration: 140

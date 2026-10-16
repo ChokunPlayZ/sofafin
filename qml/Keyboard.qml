@@ -9,10 +9,11 @@ Popup {
     property color accent: "#66c0f4"
     readonly property var characters: (mode === 0 ? "abcdefghijklmnopqrstuvwxyz0123456789.-/:" : mode === 1 ? "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@!?" : "0123456789!@#$%^&*()-_=+[]{};:'\",.<>/?\\|~").split("")
     width: Math.min(760, parent.width - 40)
-    height: 396
+    height: Math.min(parent.height - 40, 185 + Math.ceil(characters.length / 10) * 50)
     x: (parent.width - width) / 2
     y: (parent.height - height) / 2
     modal: true; focus: true; padding: 24
+    objectName: "keyboard"
     closePolicy: Popup.CloseOnEscape
     background: Rectangle { color: "#152637"; radius: 10; border.color: "#3d586d" }
     function edit(field) { target = field; open(); Qt.callLater(() => keys.itemAt(0).forceActiveFocus()) }
@@ -30,6 +31,7 @@ Popup {
                 NavButton {
                     required property string modelData
                     required property int index
+                    objectName: "keyboard-key-" + index
                     Layout.fillWidth: true; implicitWidth: 40; implicitHeight: 43; padding: 4
                     text: modelData; accent: keyboard.accent
                     leftTarget: keys.itemAt(Math.max(0, index - 1))
