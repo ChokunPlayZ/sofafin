@@ -1,6 +1,7 @@
 #include "AppController.h"
 #include "ControllerInput.h"
 #include "MpvVideo.h"
+#include "BlurHash.h"
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -33,6 +34,7 @@ int main(int argc, char *argv[]) {
         ControllerInput input;
         AppController controller(&settings, &player);
         QQmlApplicationEngine engine;
+        engine.addImageProvider("blurhash", new BlurHashProvider);
         qmlRegisterType<MpvVideo>("JFGamescope", 1, 0, "MpvVideo");
         engine.rootContext()->setContextProperty("App", &controller);
         engine.rootContext()->setContextProperty("Player", &player);

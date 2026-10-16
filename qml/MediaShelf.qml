@@ -9,6 +9,7 @@ FocusScope {
     property real cardWidth: 156
     property real cardHeight: 226
     property int initialIndex: 0
+    property bool loadArtwork: true
     readonly property int itemIndex: list.currentIndex
     signal activated(var media)
     signal selected(var media)
@@ -19,13 +20,13 @@ FocusScope {
     function focusFirst() { list.forceActiveFocus(); announce() }
     function announce() { if (items.length && list.currentIndex >= 0) selected(items[list.currentIndex]) }
     Text { text: shelf.title; color: "#e5eef6"; font.pixelSize: 22; font.weight: Font.DemiBold }
-    Text { anchors.right: parent.right; text: items.length + " TITLES"; color: "#72899b"; font.pixelSize: 11; font.letterSpacing: 2; y: 8 }
     ListView {
         id: list
         anchors { left: parent.left; right: parent.right; top: parent.top; topMargin: 39; bottom: parent.bottom }
         orientation: ListView.Horizontal
         spacing: 18
         clip: true
+        cacheBuffer: 0
         model: shelf.items
         currentIndex: Math.min(shelf.initialIndex, Math.max(0, count - 1))
         focus: true
@@ -49,7 +50,7 @@ FocusScope {
             id: card
             required property var modelData
             required property int index
-            width: shelf.cardWidth
+            width: modelData.imageAspect > 1 ? shelf.cardHeight * 16 / 9 : shelf.cardWidth
             height: shelf.cardHeight + 48
             readonly property bool selected: list.activeFocus && list.currentIndex === index
             Rectangle {
@@ -57,7 +58,10 @@ FocusScope {
                 width: parent.width; height: shelf.cardHeight; radius: 5; color: "#22394d"
                 gradient: Gradient { GradientStop { position: 0; color: "#304e65" } GradientStop { position: 1; color: "#142435" } }
                 Text { anchors.centerIn: parent; text: (card.modelData.title || "?").charAt(0); color: "#53718b"; font.pixelSize: 76; font.weight: Font.Light }
-                Image { anchors.fill: parent; source: card.modelData.poster || ""; asynchronous: true; fillMode: Image.PreserveAspectCrop }
+                Artwork { anchors.fill: parent; url: card.modelData.poster || ""; blurHash: card.modelData.posterBlurHash || ""; load: shelf.loadArtwork && card.x + card.width >= list.contentX && card.x <= list.contentX + list.width }
+                Rectangle { visible: card.modelData.played || card.modelData.favorite; anchors { left: parent.left; top: parent.top; margins: 8 } width: statusLabel.implicitWidth + 16; height: 25; radius: 3; color: "#db101c29"
+                    Text { id: statusLabel; anchors.centerIn: parent; text: (card.modelData.played ? "✓ " : "") + (card.modelData.favorite ? "♥" : ""); color: shelf.accent; font.pixelSize: 14 }
+                }
                 Rectangle { anchors.fill: parent; color: "transparent"; radius: 5; border.width: card.selected ? 4 : 0; border.color: shelf.accent }
                 Rectangle { anchors { bottom: parent.bottom; left: parent.left; right: parent.right; margins: 6 } height: 3; color: "#547083"; visible: card.modelData.progress > 0
                     Rectangle { height: parent.height; width: parent.width * Math.min(1, card.modelData.progress || 0); color: shelf.accent }

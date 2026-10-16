@@ -9,6 +9,7 @@ Button {
     property Item downTarget
     property Item leftTarget
     property Item rightTarget
+    signal navigatedUp()
     implicitHeight: 48
     implicitWidth: Math.max(120, label.implicitWidth + 36)
     padding: 16
@@ -35,7 +36,7 @@ Button {
     Keys.onEnterPressed: { if (checkable) checked = !checked; clicked() }
     Keys.onPressed: event => {
         let target = null
-        if (event.key === Qt.Key_Up) target = upTarget || nextItemInFocusChain(false)
+        if (event.key === Qt.Key_Up) { target = upTarget || nextItemInFocusChain(false); navigatedUp() }
         else if (event.key === Qt.Key_Down) target = downTarget || nextItemInFocusChain(true)
         else if (event.key === Qt.Key_Left) target = leftTarget || nextItemInFocusChain(false)
         else if (event.key === Qt.Key_Right) target = rightTarget || nextItemInFocusChain(true)

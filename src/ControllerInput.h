@@ -3,6 +3,8 @@
 #include <QTimer>
 #include <QElapsedTimer>
 #include <QHash>
+#include <QRect>
+#include <QUrl>
 #include <SDL.h>
 
 class ControllerInput : public QObject {
@@ -12,8 +14,11 @@ public:
     explicit ControllerInput(QObject *parent = nullptr);
     ~ControllerInput() override;
     QString name() const { return m_name; }
+    Q_INVOKABLE bool showKeyboard(int x, int y, int width, int height);
+    static QUrl keyboardUrl(const QRect &field);
 signals:
     void changed();
+    void keyboardRequested();
 private:
     void poll();
     void refresh();

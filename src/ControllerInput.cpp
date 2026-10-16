@@ -2,6 +2,8 @@
 #include <QGuiApplication>
 #include <QKeyEvent>
 #include <QWindow>
+#include <QDesktopServices>
+#include <QUrlQuery>
 
 ControllerInput::ControllerInput(QObject *parent) : QObject(parent) {
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
@@ -13,6 +15,20 @@ ControllerInput::ControllerInput(QObject *parent) : QObject(parent) {
 ControllerInput::~ControllerInput() {
     if (m_controller) SDL_GameControllerClose(m_controller);
     SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
+}
+QUrl ControllerInput::keyboardUrl(const QRect &field) {
+    QUrl url("steam://open/keyboard");
+    QUrlQuery query;
+    query.addQueryItem("XPosition", QString::number(qMax(0, field.x())));
+    query.addQueryItem("YPosition", QString::number(qMax(0, field.y())));
+    query.addQueryItem("Width", QString::number(qMax(0, field.width())));
+    query.addQueryItem("Height", QString::number(qMax(0, field.height())));
+    query.addQueryItem("Mode", "0"); // Single line; Steam sends ordinary keyboard events to Qt.
+    url.setQuery(query);
+    return url;
+}
+bool ControllerInput::showKeyboard(int x, int y, int width, int height) {
+    return QDesktopServices::openUrl(keyboardUrl(QRect(x, y, width, height)));
 }
 void ControllerInput::refresh() {
     if (m_controller && SDL_GameControllerGetAttached(m_controller)) return;
@@ -27,6 +43,11 @@ void ControllerInput::refresh() {
 void ControllerInput::press(int key, bool repeat) {
     auto *window = QGuiApplication::focusWindow();
     if (!window || !window->isActive()) return;
+    const auto *focus = window->focusObject();
+    if (key == Qt::Key_Return && focus && focus->property("cursorPosition").isValid() && focus->property("echoMode").isValid()) {
+        emit keyboardRequested();
+        return;
+    }
     QKeyEvent down(QEvent::KeyPress, key, Qt::NoModifier, {}, repeat);
     QKeyEvent up(QEvent::KeyRelease, key, Qt::NoModifier);
     QCoreApplication::sendEvent(window, &down);

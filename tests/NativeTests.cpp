@@ -1,6 +1,9 @@
 #include "AppController.h"
 #include "ControllerInput.h"
 #include "MpvVideo.h"
+#include "BlurHash.h"
+#include <QDesktopServices>
+#include <QQmlComponent>
 #include "FakeNetwork.h"
 #include <QtTest>
 #include <QQmlApplicationEngine>
@@ -24,6 +27,7 @@ class NativeTests : public QObject {
     std::unique_ptr<AppController> m_app;
     std::unique_ptr<QQmlApplicationEngine> m_engine;
     QQuickWindow *m_window = nullptr;
+    QUrl m_keyboardUrl;
     QJsonObject movie(const QString &id = "movie", const QString &title = "The Long Way Home") {
         return {{"Id", id}, {"Name", title}, {"Type", "Movie"}, {"ProductionYear", 2025},
             {"RunTimeTicks", 72000000000LL}, {"Overview", "A small crew crosses an unfamiliar ocean in search of a place to call home."},
@@ -59,7 +63,16 @@ private slots:
             else if (path.endsWith("PlaybackInfo")) {
                 const bool direct = QJsonDocument::fromJson(request.body).object()["EnableDirectPlay"].toBool();
                 result = {{"PlaySessionId", "session"}, {"MediaSources", QJsonArray{QJsonObject{
-                    {"Id", "source"}, {"SupportsDirectPlay", direct}, {"TranscodingUrl", "/base/Videos/movie/master.m3u8"}}}}};
+                    {"Id", "source"}, {"SupportsDirectPlay", direct}, {"TranscodingUrl", "/base/Videos/movie/master.m3u8"},
+                    {"MediaStreams", QJsonArray{QJsonObject{{"Type", "Audio"}, {"Index", 1}, {"DisplayTitle", "English"}},
+                        QJsonObject{{"Type", "Audio"}, {"Index", 2}, {"DisplayTitle", "Thai"}},
+                        QJsonObject{{"Type", "Subtitle"}, {"Index", 3}, {"DisplayTitle", "English"}}}}}}}};
+            } else if (path.contains("/FavoriteItems/") || path.contains("/PlayedItems/")) {
+                const bool added = request.operation == QNetworkAccessManager::PostOperation;
+                result = path.contains("/FavoriteItems/") ? QJsonObject{{"IsFavorite", added}} : QJsonObject{{"Played", added}, {"PlaybackPositionTicks", 0}};
+            } else if (path.contains("/Items/") && !path.endsWith("/Resume")) {
+                const QString id = path.section('/', -1);
+                result = movie(id);
             } else if (path.endsWith("Items") || path.endsWith("Resume") || path.endsWith("NextUp")) {
                 QJsonArray titles;
                 const int start = QUrlQuery(request.request.url()).queryItemValue("StartIndex").toInt();
@@ -72,6 +85,8 @@ private slots:
         m_player = std::make_unique<MpvPlayer>(); m_input = std::make_unique<ControllerInput>();
         m_app = std::make_unique<AppController>(m_settings.get(), m_player.get(), nullptr, m_network.get());
         m_engine = std::make_unique<QQmlApplicationEngine>();
+        m_engine->addImageProvider("blurhash", new BlurHashProvider);
+        m_keyboardUrl = QUrl(); QDesktopServices::setUrlHandler("steam", this, "captureKeyboardUrl");
         auto *ctx = m_engine->rootContext();
         ctx->setContextProperty("App", m_app.get()); ctx->setContextProperty("Player", m_player.get());
         ctx->setContextProperty("Preferences", m_settings.get()); ctx->setContextProperty("Controller", m_input.get());
@@ -82,20 +97,27 @@ private slots:
         m_window->requestActivate(); QTest::qWait(30);
     }
     void cleanup() {
+        QDesktopServices::unsetUrlHandler("steam");
         m_engine.reset(); m_app.reset(); m_input.reset(); m_player.reset(); m_network.reset(); m_settings.reset();
     }
-    void controllerKeyboardAndSignInFocus() {
+    void captureKeyboardUrl(const QUrl &url) { m_keyboardUrl = url; }
+    void steamKeyboardAndSignInFocus() {
         auto *server = qobject_cast<QQuickItem *>(object("serverField")); QVERIFY(server); server->forceActiveFocus();
+        QTest::keyClick(m_window, Qt::Key_F2);
+        QTRY_COMPARE(m_keyboardUrl.scheme(), "steam");
+        QCOMPARE(m_keyboardUrl.host(), "open"); QCOMPARE(m_keyboardUrl.path(), "/keyboard");
+        const QUrlQuery parameters(m_keyboardUrl);
+        QCOMPARE(parameters.queryItemValue("Mode"), "0");
+        QCOMPARE(parameters.queryItemValue("Width").toInt(), qRound(server->width()));
+        QVERIFY(parameters.queryItemValue("YPosition").toInt() > 0);
+        QVERIFY(server->hasActiveFocus());
+        for (const char c : QByteArray("https://example.com")) QTest::keyClick(m_window, c);
+        QVERIFY(server->property("text").toString().endsWith("https://example.com"));
+        // Steam's Done/Enter advances focus and must not reopen the keyboard.
+        m_keyboardUrl = QUrl();
         QTest::keyClick(m_window, Qt::Key_Return);
-        auto *keyboard = object("keyboard"); QVERIFY(keyboard); QTRY_VERIFY(keyboard->property("visible").toBool());
-        QTest::keyClick(m_window, Qt::Key_Return);
-        QTRY_VERIFY(server->property("text").toString().endsWith('a'));
-        QTest::keyClick(m_window, Qt::Key_Right); QTest::keyClick(m_window, Qt::Key_Return);
-        QTRY_VERIFY(server->property("text").toString().endsWith("ab"));
-        QTest::keyClick(m_window, Qt::Key_Escape);
-        QTRY_VERIFY(!keyboard->property("visible").toBool());
-        QTest::keyClick(m_window, Qt::Key_Down);
         QTRY_VERIFY(object("usernameField")->property("activeFocus").toBool());
+        QVERIFY(m_keyboardUrl.isEmpty());
         QTest::keyClick(m_window, Qt::Key_Down); QTest::keyClick(m_window, Qt::Key_Down);
         QTRY_VERIFY(object("rememberButton")->property("activeFocus").toBool());
         const bool before = object("rememberButton")->property("checked").toBool();
@@ -123,9 +145,9 @@ private slots:
         QTRY_VERIFY(object("usernameField")->property("activeFocus").toBool());
         SDL_JoystickSetVirtualButton(stick, SDL_CONTROLLER_BUTTON_DPAD_DOWN, 0); QTest::qWait(30);
         SDL_JoystickSetVirtualButton(stick, SDL_CONTROLLER_BUTTON_A, 1);
-        QTRY_VERIFY(object("keyboard")->property("visible").toBool());
+        QTRY_COMPARE(m_keyboardUrl.scheme(), "steam");
+        QVERIFY(object("usernameField")->property("activeFocus").toBool());
         SDL_JoystickSetVirtualButton(stick, SDL_CONTROLLER_BUTTON_A, 0);
-        QTest::keyClick(m_window, Qt::Key_Escape);
         SDL_JoystickClose(stick); QCOMPARE(SDL_JoystickDetachVirtual(index), 0);
         QTRY_COMPARE(m_input->name(), "Keyboard");
     }
@@ -155,6 +177,133 @@ private slots:
         QTest::keyClick(m_window, Qt::Key_Up);
         QTRY_VERIFY(object("shelf-0")->property("activeFocus").toBool());
     }
+    void blurHashDecodingAndLazyArtwork() {
+        const auto black = BlurHashProvider::decode("000000");
+        QCOMPARE(black.size(), QSize(32, 24)); QCOMPARE(black.pixelColor(5, 5), QColor(Qt::black));
+        const QString sample = "LEHV6nWB2yk8pyo0adR*.7kCMdnj";
+        const auto decoded = BlurHashProvider::decode(sample);
+        QVERIFY(!decoded.isNull()); QVERIFY(decoded.pixel(0, 0) != decoded.pixel(16, 12));
+        for (const auto &invalid : {"", "abc", "00000!", "~00000", "00~~~~", "LEHV6nWB2yk8pyo0adR*.7kCMdn!"})
+            QVERIFY(BlurHashProvider::decode(QString::fromLatin1(invalid)).isNull());
+        QCOMPARE(BlurHashProvider::decode(sample, QSize(10000, 10000)).size(), QSize(64, 64));
+        BlurHashProvider provider; QSize size;
+        QCOMPARE(provider.requestImage(QString::fromLatin1(sample.toLatin1().toHex()), &size, QSize(32, 24)), decoded);
+        // The full image stays unrequested until its card enters the viewport.
+        QTemporaryDir directory; const auto path = directory.filePath("art.png"); QVERIFY(decoded.save(path));
+        QQmlComponent component(m_engine.get(), QUrl("qrc:/qml/Artwork.qml"));
+        std::unique_ptr<QObject> art(component.createWithInitialProperties({{"load", false}, {"url", QUrl::fromLocalFile(path).toString()}, {"blurHash", sample}}));
+        QVERIFY2(art, qPrintable(component.errorString()));
+        QCOMPARE(art->property("status").toInt(), 0); // Image.Null
+        art->setProperty("load", true);
+        QTRY_COMPARE(art->property("status").toInt(), 1); // Image.Ready
+        art->setProperty("load", false); QCOMPARE(art->property("status").toInt(), 0);
+    }
+    void episodeArtworkAndSeriesNavigation() {
+        QVERIFY(signIn());
+        const QString posterHash = "LEHV6nWB2yk8pyo0adR*.7kCMdnj", backdropHash = "000000";
+        QJsonObject episode{{"Id", "episode"}, {"Name", "An episode"}, {"Type", "Episode"},
+            {"SeriesId", "series"}, {"SeriesName", "A series"}, {"SeasonId", "season"}, {"SeasonName", "Season 2"},
+            {"PrimaryImageAspectRatio", 16.0 / 9}, {"ImageTags", QJsonObject{{"Primary", "episode-tag"}}},
+            {"SeriesPrimaryImageTag", "series-tag"}, {"ParentBackdropItemId", "series"}, {"ParentBackdropImageTags", QJsonArray{"backdrop-tag"}},
+            {"ImageBlurHashes", QJsonObject{{"Primary", QJsonObject{{"episode-tag", posterHash}, {"series-tag", backdropHash}}}, {"Backdrop", QJsonObject{{"backdrop-tag", backdropHash}}}}}};
+        const auto original = m_network->respond;
+        m_network->respond = [=](const FixtureRequest &request) {
+            const auto path = request.request.url().path();
+            if (path.endsWith("/Items/episode")) return FixtureResponse{QJsonDocument(episode).toJson()};
+            if (path.endsWith("/Seasons")) return FixtureResponse{R"({"Items":[{"Id":"season","Name":"Season 2","Type":"Season","SeriesId":"series","IsFolder":true}]})"};
+            if (path.endsWith("/Episodes")) return FixtureResponse{QJsonDocument(QJsonObject{{"Items", QJsonArray{episode}}, {"TotalRecordCount", 1}}).toJson()};
+            return original(request);
+        };
+        m_app->showDetails({{"id", "episode"}}); QTRY_VERIFY(!m_app->detailLoading());
+        auto detail = m_app->detail();
+        QVERIFY(detail["poster"].toString().contains("/Items/episode/Images/Primary"));
+        QVERIFY(detail["backdrop"].toString().contains("/Items/series/Images/Backdrop/0"));
+        QCOMPARE(detail["posterBlurHash"].toString(), posterHash); QCOMPARE(detail["backdropBlurHash"].toString(), backdropHash);
+        QCOMPARE(detail["imageAspect"].toDouble(), 16.0 / 9);
+        m_app->openSeries(detail); QTRY_VERIFY(!m_app->busy());
+        QCOMPARE(m_app->title(), "A series"); QVERIFY(!m_app->canFilter());
+        auto season = m_app->shelves().first().toMap()["items"].toList().first().toMap();
+        m_app->open(season); QTRY_VERIFY(!m_app->busy());
+        QCOMPARE(m_network->requests.last().request.url().path(), "/base/Shows/series/Episodes");
+        QCOMPARE(QUrlQuery(m_network->requests.last().request.url()).queryItemValue("SeasonId"), "season");
+        m_app->back(); QTRY_VERIFY(!m_app->busy()); QCOMPARE(m_app->title(), "A series");
+        m_app->back(); QTRY_VERIFY(!m_app->busy()); QCOMPARE(m_app->title(), "Home");
+        episode.remove("ImageTags");
+        m_network->respond = [=](const FixtureRequest &) { return FixtureResponse{QJsonDocument(episode).toJson()}; };
+        m_app->showDetails({{"id", "episode"}}); QTRY_VERIFY(!m_app->detailLoading());
+        QVERIFY(m_app->detail()["poster"].toString().contains("/Items/series/Images/Primary"));
+        QCOMPARE(m_app->detail()["posterBlurHash"].toString(), backdropHash);
+        QCOMPARE(m_app->detail()["imageAspect"].toDouble(), 2.0 / 3);
+    }
+    void favoritesWatchedFiltersAndErrors() {
+        QVERIFY(signIn());
+        auto item = m_app->shelves().first().toMap()["items"].toList().first().toMap();
+        m_app->showDetails(item); QTRY_VERIFY(!m_app->detailLoading());
+        m_app->setFavorite(m_app->detail(), true); QTRY_VERIFY(!m_app->updatingUserData());
+        QVERIFY(m_app->detail()["favorite"].toBool());
+        QVERIFY(m_app->shelves().first().toMap()["items"].toList().first().toMap()["favorite"].toBool());
+        m_app->setPlayed(m_app->detail(), true); QTRY_VERIFY(!m_app->updatingUserData());
+        QVERIFY(m_app->detail()["played"].toBool()); QCOMPARE(m_app->detail()["progress"].toDouble(), 0.0);
+        m_app->setFavorite(m_app->detail(), false); QTRY_VERIFY(!m_app->updatingUserData());
+        QVERIFY(!m_app->detail()["favorite"].toBool());
+        QCOMPARE(m_network->requests.last().operation, QNetworkAccessManager::DeleteOperation);
+        m_app->setPlayed(m_app->detail(), false); QTRY_VERIFY(!m_app->updatingUserData());
+        QVERIFY(!m_app->detail()["played"].toBool());
+        m_app->home("Movies"); QTRY_VERIFY(!m_app->busy());
+        m_app->setLibraryFilter("Favorites"); QTRY_VERIFY(!m_app->busy());
+        QCOMPARE(QUrlQuery(m_network->requests.last().request.url()).queryItemValue("Filters"), "IsFavorite");
+        m_app->setSortOrder("Recently added"); QTRY_VERIFY(!m_app->busy());
+        QCOMPARE(QUrlQuery(m_network->requests.last().request.url()).queryItemValue("SortBy"), "DateCreated");
+        m_app->setLibraryFilter("Unwatched"); QTRY_VERIFY(!m_app->busy());
+        QCOMPARE(QUrlQuery(m_network->requests.last().request.url()).queryItemValue("IsPlayed"), "false");
+        m_network->respond = [](const FixtureRequest &) { return FixtureResponse{"{}", 500}; };
+        m_app->setFavorite(m_app->detail(), true); QTRY_VERIFY(!m_app->updatingUserData());
+        QVERIFY(!m_app->detail()["favorite"].toBool()); QVERIFY(m_app->message().contains("500"));
+    }
+    void staleDetailsCannotReplaceCurrentTitle() {
+        QVERIFY(signIn());
+        m_network->respond = [this](const FixtureRequest &request) {
+            const auto id = request.request.url().path().section('/', -1);
+            return FixtureResponse{QJsonDocument(movie(id)).toJson(), 200, id == "old" ? 80 : 0};
+        };
+        m_app->showDetails({{"id", "old"}}); m_app->showDetails({{"id", "new"}});
+        QTRY_VERIFY(!m_app->detailLoading()); QCOMPARE(m_app->detail()["id"].toString(), "new");
+        QTest::qWait(100); QCOMPARE(m_app->detail()["id"].toString(), "new");
+        m_app->showDetails({{"id", "old"}}); m_app->closeDetails(); QTest::qWait(100);
+        QVERIFY(m_app->detail().isEmpty()); QVERIFY(!m_app->detailLoading());
+    }
+    void longDetailsStayInsideSmallModal() {
+        QVERIFY(signIn());
+        const QString longTitle = QString("A very long movie title with a distant destination ").repeated(8);
+        m_network->respond = [this, longTitle](const FixtureRequest &request) {
+            auto result = movie(request.request.url().path().section('/', -1), longTitle);
+            result["Overview"] = QString("An extended description of the journey. ").repeated(30);
+            return FixtureResponse{QJsonDocument(result).toJson()};
+        };
+        m_window->resize(800, 500);
+        m_app->showDetails({{"id", "long"}});
+        auto *popup = object("detailPopup"); QVERIFY(popup); QVERIFY(QMetaObject::invokeMethod(popup, "open"));
+        QTRY_VERIFY(!m_app->detailLoading());
+        auto *play = qobject_cast<QQuickItem *>(object("playButton")); QVERIFY(play);
+        QTRY_VERIFY(play->hasActiveFocus());
+        auto *scroll = qobject_cast<QQuickItem *>(object("detailScroll")); QVERIFY(scroll);
+        const auto insideScroll = [scroll](QQuickItem *item) {
+            return QRectF(0, 0, scroll->width(), scroll->height()).adjusted(-1, -1, 1, 1).contains(item->mapRectToItem(scroll, item->boundingRect()));
+        };
+        QTRY_VERIFY(insideScroll(play));
+        QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("restartButton")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("preplayQuality")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("preplayAudio")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("preplaySubtitle")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("favoriteButton")->property("activeFocus").toBool());
+        QTRY_VERIFY(insideScroll(qobject_cast<QQuickItem *>(object("favoriteButton"))));
+        QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("watchedButton")->property("activeFocus").toBool());
+        QTRY_VERIFY(insideScroll(qobject_cast<QQuickItem *>(object("watchedButton"))));
+        const auto preview = qEnvironmentVariable("JF_DETAIL_SCREENSHOT");
+        if (!preview.isEmpty()) QVERIFY(m_window->grabWindow().save(preview));
+        QTest::keyClick(m_window, Qt::Key_Escape);
+        QTRY_VERIFY(!popup->property("visible").toBool());
+    }
     void negotiatesPlaybackWithoutResettingShelves() {
         QVERIFY(signIn());
         const auto item = m_app->shelves().first().toMap()["items"].toList().first().toMap();
@@ -181,13 +330,134 @@ private slots:
         QVERIFY(object("modeSetting")->property("activeFocus").toBool());
         QTest::keyClick(m_window, Qt::Key_Escape); m_app->stopPlayback();
     }
+    void homeBackPromptsExit() {
+        QVERIFY(signIn()); QTest::qWait(20);
+        QTest::keyClick(m_window, Qt::Key_Escape);
+        QTRY_VERIFY(object("exitPrompt")->property("visible").toBool());
+        QVERIFY(!object("optionsPopup")->property("visible").toBool());
+        QTRY_VERIFY(object("cancelExit")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Escape);
+        QTRY_VERIFY(!object("exitPrompt")->property("visible").toBool());
+        QVERIFY(m_window->isVisible());
+    }
+    void librariesUseServerNamesOrderAndParents() {
+        const auto original = m_network->respond;
+        m_network->respond = [original](const FixtureRequest &request) {
+            if (request.request.url().path().endsWith("/Views")) return FixtureResponse{R"({"Items":[
+                {"Id":"anime","Name":"Anime","Type":"CollectionFolder","CollectionType":"tvshows","IsFolder":true},
+                {"Id":"films","Name":"Cinema","Type":"CollectionFolder","CollectionType":"movies","IsFolder":true}]})"};
+            return original(request);
+        };
+        QVERIFY(signIn()); QCOMPARE(m_app->libraries().size(), 2); QCOMPARE(m_app->shelves().size(), 4);
+        QCOMPARE(object("libraryTab-0")->property("text").toString(), "Anime");
+        QCOMPARE(object("libraryTab-1")->property("text").toString(), "Cinema");
+        bool series = false, movies = false;
+        for (const auto &request : m_network->requests) {
+            const QUrlQuery query(request.request.url());
+            if (query.queryItemValue("ParentId") == "anime") series = query.queryItemValue("IncludeItemTypes") == "Series";
+            if (query.queryItemValue("ParentId") == "films") movies = query.queryItemValue("IncludeItemTypes") == "Movie";
+        }
+        QVERIFY(series); QVERIFY(movies);
+        m_app->home("Movies"); m_app->home(); QTRY_VERIFY(!m_app->busy());
+        QCOMPARE(m_app->shelves().size(), 4);
+    }
+    void playbackSelectionsSegmentsAndCancellation() {
+        QVERIFY(signIn()); m_engine.reset();
+        const auto original = m_network->respond;
+        m_network->respond = [original](const FixtureRequest &request) {
+            if (request.request.url().path().contains("MediaSegments/"))
+                return FixtureResponse{R"({"Items":[{"Type":"Intro","StartTicks":0,"EndTicks":300000000}]})", 200, 20};
+            return original(request);
+        };
+        const auto item = m_app->shelves().first().toMap()["items"].toList().first().toMap();
+        m_app->play(item, false, {{"quality", 8000000}, {"audio", 2}, {"subtitle", -1}, {"sourceId", "source"}});
+        QTRY_VERIFY(m_player->active()); QCOMPARE(m_app->playMethod(), "Transcode");
+        QTRY_COMPARE(m_app->mediaSegments().size(), 1);
+        auto playbackRequest = [this] {
+            for (auto i = m_network->requests.crbegin(); i != m_network->requests.crend(); ++i)
+                if (i->request.url().path().endsWith("PlaybackInfo")) return QJsonDocument::fromJson(i->body).object();
+            return QJsonObject{};
+        };
+        auto request = playbackRequest();
+        QCOMPARE(request["MaxStreamingBitrate"].toInt(), 8000000);
+        QCOMPARE(request["AudioStreamIndex"].toInt(), 2); QCOMPARE(request["SubtitleStreamIndex"].toInt(), -1);
+        QCOMPARE(request["MediaSourceId"].toString(), "source");
+        QVERIFY(!request["EnableDirectPlay"].toBool());
+        m_app->skipSegment(); QTRY_VERIFY(!m_app->playbackPending());
+        QCOMPARE(playbackRequest()["StartTimeTicks"].toInteger(), 300000000LL);
+        m_app->setQuality(-1); QTRY_VERIFY(!m_app->playbackPending());
+        QCOMPARE(m_app->playMethod(), "DirectPlay");
+        QCOMPARE(playbackRequest()["StartTimeTicks"].toInteger(), 300000000LL);
+        m_player->togglePause(); QTRY_VERIFY(m_player->paused());
+        m_app->setQuality(4000000); QTRY_VERIFY(!m_app->playbackPending());
+        m_player->loaded(); QTRY_VERIFY(m_player->paused());
+        m_app->setPlaybackTrack(false, 1); QTRY_VERIFY(!m_app->playbackPending());
+        QCOMPARE(playbackRequest()["AudioStreamIndex"].toInt(), 1);
+        QCOMPARE(playbackRequest()["StartTimeTicks"].toInteger(), 300000000LL);
+        m_player->loaded(); QTRY_VERIFY(m_player->paused());
+        m_app->stopPlayback(); QVERIFY(m_app->mediaSegments().isEmpty());
+        m_app->play(item); m_app->stopPlayback(); QTest::qWait(40);
+        QVERIFY(m_app->mediaSegments().isEmpty()); QVERIFY(!m_player->active());
+        m_network->respond = [original](const FixtureRequest &request) {
+            if (request.request.url().path().contains("MediaSegments/")) return FixtureResponse{"{}", 404};
+            return original(request);
+        };
+        m_app->play(item); QTRY_VERIFY(m_player->active());
+        QVERIFY(m_app->message().isEmpty()); QVERIFY(m_app->mediaSegments().isEmpty());
+        m_app->stopPlayback();
+    }
+    void overlayBackUpAndPauseScreen() {
+        QVERIFY(signIn());
+        auto item = m_app->shelves().first().toMap()["items"].toList().first().toMap();
+        item["type"] = "Episode"; item["seriesName"] = "A series"; item["seasonNumber"] = 2; item["episodeNumber"] = 4;
+        m_window->resize(800, 500);
+        m_app->play(item); QTRY_VERIFY(m_player->active());
+        QCOMPARE(object("playerTitle")->property("text").toString(), "A series");
+        QVERIFY(object("playerEpisode")->property("text").toString().contains("S2 · E4"));
+        auto *view = qobject_cast<QQuickItem *>(object("playbackView")); QVERIFY(view); view->forceActiveFocus();
+        QVERIFY(object("playerOverlay")->property("visible").toBool());
+        QVERIFY(!object("endingTime")->property("text").toString().isEmpty());
+        qobject_cast<QQuickItem *>(object("playerQuality"))->forceActiveFocus();
+        QTest::keyClick(m_window, Qt::Key_Return);
+        QTRY_VERIFY(object("playerTrackPopup")->property("visible").toBool());
+        QTRY_VERIFY(object("playingQuality")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Return); QTest::keyClick(m_window, Qt::Key_End); QTest::keyClick(m_window, Qt::Key_Return);
+        QTRY_COMPARE(m_app->playbackOptions().value("quality").toInt(), 4000000);
+        QTRY_VERIFY(!m_app->playbackPending()); QCOMPARE(m_app->playMethod(), "Transcode");
+        QVERIFY(!object("playerTrackPopup")->property("visible").toBool());
+        QTRY_COMPARE(m_window->activeFocusItem(), view);
+        QTest::keyClick(m_window, Qt::Key_Down);
+        QTRY_VERIFY(object("playerAudio")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Up);
+        QTRY_VERIFY(!object("playerOverlay")->property("visible").toBool());
+        QVERIFY(m_player->active());
+        QTest::keyClick(m_window, Qt::Key_Down);
+        QTest::keyClick(m_window, Qt::Key_Escape);
+        QTRY_VERIFY(!object("playerOverlay")->property("visible").toBool());
+        QVERIFY(m_player->active());
+        m_player->togglePause(); QTRY_VERIFY(m_player->paused());
+        auto *timer = object("pauseScreenTimer"); QVERIFY(timer); QCOMPARE(timer->property("interval").toInt(), 10000);
+        timer->setProperty("interval", 120);
+        QTRY_VERIFY(object("pauseScreen")->property("visible").toBool());
+        const auto screenshot = qEnvironmentVariable("JF_PAUSE_SCREENSHOT");
+        if (!screenshot.isEmpty()) QVERIFY(m_window->grabWindow().save(screenshot));
+        QVERIFY(!object("playerOverlay")->property("visible").toBool());
+        QTest::keyClick(m_window, Qt::Key_Down);
+        QTRY_VERIFY(!object("pauseScreen")->property("visible").toBool());
+        QVERIFY(m_player->paused());
+        QTest::keyClick(m_window, Qt::Key_Up);
+        QTest::keyClick(m_window, Qt::Key_Escape);
+        QTRY_VERIFY(!m_player->active());
+    }
     void embeddedMpvDecodesPausesAndResumes() {
         m_engine.reset();
         const auto ffmpeg = QStandardPaths::findExecutable("ffmpeg");
         if (ffmpeg.isEmpty()) QSKIP("ffmpeg is required to generate the playback fixture.");
         QTemporaryDir dir; const QString clip = dir.filePath("clip.mp4");
         QProcess encoder;
-        encoder.start(ffmpeg, {"-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=64x64:rate=10", "-t", "3", "-c:v", "mpeg4", "-y", clip});
+        encoder.start(ffmpeg, {"-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=64x64:rate=10",
+            "-f", "lavfi", "-i", "sine=frequency=400", "-f", "lavfi", "-i", "sine=frequency=800",
+            "-map", "0:v", "-map", "1:a", "-map", "2:a", "-t", "3", "-c:v", "mpeg4", "-c:a", "aac", "-y", clip});
         QVERIFY(encoder.waitForFinished(10000)); QCOMPARE(encoder.exitCode(), 0);
         mpv_render_context *raw = nullptr;
         mpv_render_param init[] = {{MPV_RENDER_PARAM_API_TYPE, const_cast<char *>(MPV_RENDER_API_TYPE_SW)}, {MPV_RENDER_PARAM_INVALID, nullptr}};
@@ -201,6 +471,7 @@ private slots:
                 {MPV_RENDER_PARAM_SW_STRIDE, &stride}, {MPV_RENDER_PARAM_SW_POINTER, pixels.data()}, {MPV_RENDER_PARAM_INVALID, nullptr}};
             mpv_render_context_render(raw, params); ++frames;
         });
+        mpv_set_property_string(m_player->core()->handle, "options/ao", "null");
         renderTimer.start(15); m_player->rendererReady();
         QSignalSpy loaded(m_player.get(), &MpvPlayer::loaded);
         m_player->load(QUrl::fromLocalFile(clip), 0, 0, 3, false);
@@ -208,6 +479,16 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(frames > 2 && m_player->position() > 0.2, 5000);
         QVERIFY(std::any_of(pixels.begin(), pixels.end(), [](char p) { return static_cast<unsigned char>(p) > 50; }));
         m_player->togglePause(); QTRY_VERIFY(m_player->paused());
+        m_player->selectStream(2, false);
+        auto selectedAudio = [this] { int64_t id = 0; mpv_get_property(m_player->core()->handle, "aid", MPV_FORMAT_INT64, &id); return id; };
+        QTRY_COMPARE(selectedAudio(), 2);
+        m_player->selectStream(1, false); QTRY_COMPARE(selectedAudio(), 1);
+        QFile subtitle(dir.filePath("captions.srt")); QVERIFY(subtitle.open(QIODevice::WriteOnly));
+        subtitle.write("1\n00:00:00,000 --> 00:00:03,000\nTest subtitle\n"); subtitle.close();
+        m_player->addSubtitle(QUrl::fromLocalFile(subtitle.fileName()), true);
+        QTRY_VERIFY(m_player->subtitleTrack() != "Off");
+        m_player->selectStream(-1, true); QTRY_COMPARE(m_player->subtitleTrack(), "Off");
+        QVERIFY(m_player->bufferedPosition() >= m_player->position());
         m_player->seek(1.2); QTRY_VERIFY(m_player->position() >= 1.1);
         m_player->stop(); QVERIFY(!m_player->active());
         m_player->load(QUrl::fromLocalFile(clip), 1.0, 0, 3, false);
