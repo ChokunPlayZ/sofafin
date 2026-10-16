@@ -102,6 +102,7 @@ private:
     void setError(const QString &error);
     void updateUserData(const QString &id, const QJsonObject &data);
     void changeUserData(const QVariantMap &item, bool value, bool favorite);
+    void fetchDetailSeasons(int generation);
     void fetchThemeSong();
     void stopThemeSong();
     Settings *m_settings;

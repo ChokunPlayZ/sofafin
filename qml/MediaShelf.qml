@@ -12,13 +12,13 @@ FocusScope {
     property bool loadArtwork: true
     readonly property int itemIndex: list.currentIndex
     signal activated(var media)
-    signal selected(var media)
+    signal selected(var media, int selectedIndex)
     signal moveUp()
     signal moveDown()
     implicitHeight: cardHeight + 89
     visible: items.length > 0
     function focusFirst() { list.forceActiveFocus(); announce() }
-    function announce() { if (items.length && list.currentIndex >= 0) selected(items[list.currentIndex]) }
+    function announce() { if (items.length && list.currentIndex >= 0) selected(items[list.currentIndex], list.currentIndex) }
     Text { text: shelf.title; color: "#e5eef6"; font.pixelSize: 22; font.weight: Font.DemiBold }
     ListView {
         id: list
@@ -46,30 +46,16 @@ FocusScope {
             else return
             event.accepted = true
         }
-        delegate: Item {
+        delegate: MediaCard {
             id: card
             required property var modelData
             required property int index
             width: modelData.imageAspect > 1 ? shelf.cardHeight * 16 / 9 : shelf.cardWidth
             height: shelf.cardHeight + 48
-            readonly property bool selected: list.activeFocus && list.currentIndex === index
-            Rectangle {
-                id: poster
-                width: parent.width; height: shelf.cardHeight; radius: 5; color: "#22394d"
-                gradient: Gradient { GradientStop { position: 0; color: "#304e65" } GradientStop { position: 1; color: "#142435" } }
-                Text { anchors.centerIn: parent; text: (card.modelData.title || "?").charAt(0); color: "#53718b"; font.pixelSize: 76; font.weight: Font.Light }
-                Artwork { anchors.fill: parent; url: card.modelData.poster || ""; blurHash: card.modelData.posterBlurHash || ""; load: shelf.loadArtwork && card.x + card.width >= list.contentX && card.x <= list.contentX + list.width }
-                Rectangle { visible: card.modelData.played || card.modelData.favorite; anchors { left: parent.left; top: parent.top; margins: 8 } width: statusLabel.implicitWidth + 16; height: 25; radius: 3; color: "#db101c29"
-                    Text { id: statusLabel; anchors.centerIn: parent; text: (card.modelData.played ? "✓ " : "") + (card.modelData.favorite ? "♥" : ""); color: shelf.accent; font.pixelSize: 14 }
-                }
-                Rectangle { anchors.fill: parent; color: "transparent"; radius: 5; border.width: card.selected ? 4 : 0; border.color: shelf.accent }
-                Rectangle { anchors { bottom: parent.bottom; left: parent.left; right: parent.right; margins: 6 } height: 3; color: "#547083"; visible: card.modelData.progress > 0
-                    Rectangle { height: parent.height; width: parent.width * Math.min(1, card.modelData.progress || 0); color: shelf.accent }
-                }
-            }
-            Text { y: shelf.cardHeight + 10; width: parent.width; text: card.modelData.title || ""; color: card.selected ? "white" : "#c5d5e2"; elide: Text.ElideRight; font.pixelSize: 15; font.weight: Font.DemiBold }
-            Text { y: shelf.cardHeight + 31; width: parent.width; text: card.modelData.subtitle || ""; color: "#7892a6"; elide: Text.ElideRight; font.pixelSize: 11 }
-            MouseArea { anchors.fill: parent; onClicked: { list.currentIndex = card.index; list.forceActiveFocus(); shelf.activated(card.modelData) } }
+            media: modelData; posterHeight: shelf.cardHeight; accent: shelf.accent
+            selected: list.activeFocus && list.currentIndex === index
+            loadArtwork: shelf.loadArtwork && card.x + card.width >= list.contentX && card.x <= list.contentX + list.width
+            onActivated: { list.currentIndex = card.index; list.forceActiveFocus(); shelf.activated(card.modelData) }
         }
     }
 }

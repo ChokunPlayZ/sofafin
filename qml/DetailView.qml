@@ -13,37 +13,65 @@ FocusScope {
     property bool extrasExpanded: false
     property bool needsFocus: false
     property var history: []
+    property var selectedEpisodes: ({})
+    property string activeSeasonId: ""
+    property string pendingSeasonId: ""
+    property Item scrollFocusItem
     signal closed()
     signal settingsRequested()
     visible: opened && App.signedIn && !Player.active && !App.playbackPending
     onMediaIdChanged: {
         playbackExpanded = false; extrasExpanded = false
-        detailScroll.contentY = 0; needsFocus = true
+        detailScroll.contentY = 0; needsFocus = true; scrollFocusItem = null
     }
     onVisibleChanged: if (visible) focusAction()
-    function open() { history = []; opened = true; detailScroll.contentY = 0; needsFocus = true; focusAction() }
+    function open() { history = []; selectedEpisodes = ({}); pendingSeasonId = ""; activeSeasonId = ""; opened = true; detailScroll.contentY = 0; needsFocus = true; focusAction() }
+    function openAtSeason(seasonId) { open(); pendingSeasonId = seasonId }
     function close() { if (opened) { opened = false; history = []; closed() } }
-    function show(item) { history = history.concat([Object.assign({}, App.detail)]); App.showDetails(item) }
+    function show(item, seasonId) {
+        history = history.concat([{media: Object.assign({}, App.detail), seasonId: activeSeasonId}])
+        pendingSeasonId = seasonId || ""; activeSeasonId = ""
+        App.showDetails(item)
+    }
     function back() {
         if (!history.length) { close(); return }
         const previous = history[history.length - 1]
         history = history.slice(0, -1)
-        App.showDetails(previous)
+        pendingSeasonId = previous.seasonId; activeSeasonId = ""
+        App.showDetails(previous.media)
     }
     function focusAction() {
-        if (visible && needsFocus && !App.detailLoading) {
+        if (visible && needsFocus && !App.detailLoading && !media.seasonsLoading) {
             needsFocus = false
-            Qt.callLater(() => primaryAction.forceActiveFocus())
+            Qt.callLater(() => {
+                const seasonId = pendingSeasonId; pendingSeasonId = ""
+                for (let i = 0; i < seasons.count; ++i) {
+                    const section = seasons.itemAt(i)
+                    if (section.modelData.id === seasonId && section.episodes.visible) { section.episodes.focusFirst(); return }
+                }
+                primaryAction.forceActiveFocus()
+            })
         }
+    }
+    function focusSeason(index, direction) {
+        for (let i = index; i >= 0 && i < seasons.count; i += direction) {
+            const shelf = seasons.itemAt(i).episodes
+            if (shelf.visible) { shelf.focusFirst(); return }
+        }
+        if (direction < 0) primaryAction.forceActiveFocus()
     }
     function restoreFocus() { if (visible && !activeFocus && !App.detailLoading) primaryAction.forceActiveFocus() }
     Connections { target: App; function onDetailsChanged() { page.focusAction() } }
     Keys.onEscapePressed: back()
     function reveal(item) {
+        scrollFocusItem = item
         const point = item.mapToItem(detailColumn, 0, 0)
         if (point.y < detailScroll.contentY) detailScroll.contentY = point.y
         else if (point.y + item.height > detailScroll.contentY + detailScroll.height)
             detailScroll.contentY = point.y + item.height - detailScroll.height
+    }
+    function revealFocusedItem() {
+        if (scrollFocusItem && scrollFocusItem.activeFocus && scrollFocusItem.visible) reveal(scrollFocusItem)
     }
     Rectangle { anchors.fill: parent; color: "#101923" }
     Artwork {
@@ -82,29 +110,47 @@ FocusScope {
         id: detailScroll
         objectName: "detailScroll"
         x: page.width < 1000 ? 32 : 64; y: 110
-        width: Math.min(740, parent.width - 2 * x)
+        width: parent.width - 2 * x
         height: parent.height - y - 32
         clip: true; contentWidth: width; contentHeight: detailColumn.implicitHeight
+        onWidthChanged: Qt.callLater(page.revealFocusedItem)
+        onHeightChanged: Qt.callLater(page.revealFocusedItem)
+        onContentHeightChanged: Qt.callLater(page.revealFocusedItem)
         boundsBehavior: Flickable.StopAtBounds
         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
         ColumnLayout {
             id: detailColumn
             width: detailScroll.width - 14; spacing: 16
-            Text { objectName: "detailTitle"; Layout.fillWidth: true; Layout.minimumWidth: 0; text: page.media.title || ""; wrapMode: Text.Wrap; color: "white"; font.pixelSize: page.width < 1000 ? 34 : 46; font.weight: Font.Bold }
-            Text { Layout.fillWidth: true; text: page.media.subtitle || ""; visible: text.length > 0; color: page.accent; font.pixelSize: 14; wrapMode: Text.Wrap }
-            Text { Layout.fillWidth: true; text: [page.media.rating || "", page.media.communityRating ? "★ " + page.media.communityRating.toFixed(1) : "", (page.media.genres || []).join(" · ")].filter(Boolean).join("   "); color: "#c3d4df"; font.pixelSize: 13; wrapMode: Text.Wrap; visible: text.length > 0 }
-            Text { Layout.fillWidth: true; text: page.media.tagline || ""; visible: text.length > 0; color: "#c3d4df"; font.pixelSize: 15; font.italic: true; wrapMode: Text.Wrap }
-            Text { Layout.fillWidth: true; text: page.media.overview || ""; visible: text.length > 0; wrapMode: Text.Wrap; color: "#afc5d5"; font.pixelSize: 16; lineHeight: 1.25 }
+            Text { objectName: "detailTitle"; Layout.fillWidth: true; Layout.maximumWidth: 726; Layout.minimumWidth: 0; text: page.media.title || ""; wrapMode: Text.Wrap; color: "white"; font.pixelSize: page.width < 1000 ? 34 : 46; font.weight: Font.Bold }
+            Text { Layout.fillWidth: true; Layout.maximumWidth: 726; text: page.media.subtitle || ""; visible: text.length > 0; color: page.accent; font.pixelSize: 14; wrapMode: Text.Wrap }
+            Text { Layout.fillWidth: true; Layout.maximumWidth: 726; text: [page.media.rating || "", page.media.communityRating ? "★ " + page.media.communityRating.toFixed(1) : "", (page.media.genres || []).join(" · ")].filter(Boolean).join("   "); color: "#c3d4df"; font.pixelSize: 13; wrapMode: Text.Wrap; visible: text.length > 0 }
+            Text { Layout.fillWidth: true; Layout.maximumWidth: 726; text: page.media.tagline || ""; visible: text.length > 0; color: "#c3d4df"; font.pixelSize: 15; font.italic: true; wrapMode: Text.Wrap }
+            Text { Layout.fillWidth: true; Layout.maximumWidth: 726; text: page.media.overview || ""; visible: text.length > 0; wrapMode: Text.Wrap; color: "#afc5d5"; font.pixelSize: 16; lineHeight: 1.25 }
             BusyIndicator { running: App.detailLoading; visible: running; implicitWidth: 32; implicitHeight: 32 }
             NavButton {
                 id: primaryAction
                 objectName: "playButton"
                 Layout.preferredWidth: 220; Layout.minimumWidth: 0; implicitHeight: 52
-                text: page.media.folder ? (page.media.type === "Series" ? "Seasons" : "Browse") : App.busy ? "Preparing…" : page.media.progress > 0 ? "Resume" : "Play"
+                text: page.media.folder ? (page.media.type === "Series" ? "Episodes" : "Browse") : App.busy ? "Preparing…" : page.media.progress > 0 ? "Resume" : "Play"
                 primary: true; accent: page.accent
+                readonly property real resumeProgress: page.media.playable ? Math.max(0, Math.min(1, page.media.progress || 0)) : 0
+                Layout.bottomMargin: resumeProgress > 0 ? 8 : 0
+                bottomPadding: resumeProgress > 0 ? 20 : 16
+                Rectangle {
+                    id: resumeTrack
+                    objectName: "resumeProgressTrack"
+                    anchors { left: parent.left; right: parent.right; bottom: parent.bottom; leftMargin: 12; rightMargin: 12; bottomMargin: -4 }
+                    height: 7; radius: 3.5; color: "#405569"
+                    visible: primaryAction.resumeProgress > 0
+                    Rectangle { objectName: "resumeProgressFill"; height: parent.height; width: parent.width * primaryAction.resumeProgress; radius: parent.radius; color: "#eff7fc" }
+                }
                 enabled: !App.busy && !App.detailLoading && (!!page.media.folder || !!page.media.playable)
                 onActiveFocusChanged: if (activeFocus) page.reveal(this)
-                onClicked: { const item = page.media; const selection = playbackOptions.selection; page.close(); if (item.folder) App.open(item); else App.play(item, true, selection) }
+                onClicked: {
+                    if (page.media.type === "Series") { page.focusSeason(0, 1); return }
+                    const item = page.media; const selection = playbackOptions.selection
+                    page.close(); if (item.folder) App.open(item); else App.play(item, true, selection)
+                }
             }
             NavButton {
                 objectName: "restartButton"
@@ -169,7 +215,7 @@ FocusScope {
                 text: "Season"; value: page.media.seasonName || ""; flat: true
                 visible: page.media.type === "Episode" && !!page.media.seasonId
                 onActiveFocusChanged: if (activeFocus) page.reveal(this)
-                onClicked: { const item = page.media; page.close(); App.openSeason(item) }
+                onClicked: page.show({id: page.media.seriesId, title: page.media.seriesName, type: "Series", folder: true}, page.media.seasonId)
             }
             NavButton {
                 Layout.fillWidth: true; Layout.minimumWidth: 0
@@ -199,6 +245,40 @@ FocusScope {
                     enabled: !App.busy && !App.detailLoading
                     onActiveFocusChanged: if (activeFocus) page.reveal(this)
                     onClicked: { const item = Object.assign({}, page.media); item.positionTicks = modelData.ticks; const selection = playbackOptions.selection; page.close(); App.play(item, true, selection) }
+                }
+            }
+            BusyIndicator { running: !!page.media.seasonsLoading; visible: running; implicitWidth: 32; implicitHeight: 32 }
+            Text {
+                Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#afc5d5"; font.pixelSize: 16
+                visible: page.media.type === "Series" && !App.detailLoading && !page.media.seasonsLoading && !(page.media.seasons || []).length
+                text: page.media.seasonsError ? "Could not load seasons. " + page.media.seasonsError : "No episodes available"
+            }
+            Repeater {
+                id: seasons
+                model: page.media.seasons || []
+                ColumnLayout {
+                    required property var modelData
+                    required property int index
+                    property alias episodes: episodeShelf
+                    objectName: "seasonSection-" + index
+                    Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 8
+                    MediaShelf {
+                        id: episodeShelf
+                        objectName: "seasonShelf-" + index
+                        Layout.fillWidth: true; Layout.minimumWidth: 0
+                        title: modelData.title; items: modelData.items; accent: page.accent
+                        cardWidth: 156 * Preferences.uiScale; cardHeight: 148 * Preferences.uiScale
+                        initialIndex: page.selectedEpisodes[modelData.id] || 0
+                        activeFocusOnTab: true
+                        loadArtwork: page.visible && y + parent.y + height >= detailScroll.contentY && y + parent.y <= detailScroll.contentY + detailScroll.height
+                        onSelected: (media, selectedIndex) => { if (activeFocus) { page.activeSeasonId = modelData.id; page.selectedEpisodes[modelData.id] = selectedIndex } }
+                        onActiveFocusChanged: if (activeFocus) { page.activeSeasonId = modelData.id; page.reveal(this) }
+                        onActivated: media => page.show(media)
+                        onMoveUp: page.focusSeason(index - 1, -1)
+                        onMoveDown: page.focusSeason(index + 1, 1)
+                    }
+                    Text { Layout.fillWidth: true; text: modelData.title; visible: !episodeShelf.visible; color: "#e5eef6"; font.pixelSize: 22; font.weight: Font.DemiBold }
+                    Text { Layout.fillWidth: true; wrapMode: Text.Wrap; visible: !episodeShelf.visible; text: modelData.error ? "Could not load episodes. " + modelData.error : "No episodes available"; color: "#afc5d5"; font.pixelSize: 14 }
                 }
             }
         }

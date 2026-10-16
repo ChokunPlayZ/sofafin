@@ -13,7 +13,6 @@ MpvPlayer::MpvPlayer(QObject *parent, bool audioOnly) : QObject(parent), m_core(
     if (audioOnly) {
         mpv_set_option_string(h, "vo", "null");
         mpv_set_option_string(h, "vid", "no");
-        mpv_set_option_string(h, "volume", "35");
         mpv_set_option_string(h, "loop-file", "inf");
         m_ready = true;
     }
@@ -76,6 +75,10 @@ void MpvPlayer::stop() {
     command({"stop"}); emit changed();
 }
 void MpvPlayer::togglePause() { command({"cycle", "pause"}); }
+void MpvPlayer::setVolume(int volume) {
+    double level = qBound(0, volume, 100);
+    mpv_set_property(m_core->handle, "volume", MPV_FORMAT_DOUBLE, &level);
+}
 void MpvPlayer::setPaused(bool paused) {
     if (mpv_set_property_string(m_core->handle, "pause", paused ? "yes" : "no") >= 0) {
         m_paused = paused; emit changed();
