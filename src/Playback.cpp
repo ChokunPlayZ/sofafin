@@ -1,6 +1,8 @@
 #include "Playback.h"
 #include <QJsonArray>
 #include <QUrlQuery>
+#include <algorithm>
+#include <cmath>
 
 QUrl Playback::endpoint(const QUrl &server, const QString &path) {
     QUrl result(server);
@@ -47,7 +49,7 @@ QJsonObject Playback::request(const QString &userId, const QString &mode, int bi
         {"AllowAudioStreamCopy", mode != "transcode"}};
 }
 Playback::Plan Playback::negotiate(const QJsonObject &response, const QUrl &server, const QString &itemId,
-    const QString &deviceId, const QString &token, const QString &mode, qint64 startTicks) {
+    const QString &deviceId, const QString &token, const QString &mode, qint64 startTicks, const QString &mediaSourceId) {
     Plan p;
     p.sessionId = response.value("PlaySessionId").toString();
     if (!response.value("ErrorCode").toString().isEmpty()) {
@@ -57,10 +59,12 @@ Playback::Plan Playback::negotiate(const QJsonObject &response, const QUrl &serv
     const auto sources = response.value("MediaSources").toArray();
     // Prefer any directly playable version before considering server transcoding.
     for (const auto &s : sources) {
+        if (!mediaSourceId.isEmpty() && s.toObject().value("Id").toString() != mediaSourceId) continue;
         if (mode != "transcode" && s.toObject().value("SupportsDirectPlay").toBool()) { p.source = s.toObject(); break; }
     }
     if (p.source.isEmpty() && mode != "direct") {
         for (const auto &s : sources) {
+            if (!mediaSourceId.isEmpty() && s.toObject().value("Id").toString() != mediaSourceId) continue;
             if (!s.toObject().value("TranscodingUrl").toString().isEmpty()) { p.source = s.toObject(); break; }
         }
     }
@@ -88,4 +92,74 @@ Playback::Plan Playback::negotiate(const QJsonObject &response, const QUrl &serv
     q.addQueryItem("api_key", token);
     p.url.setQuery(q);
     return p;
+}
+
+QVariantList Playback::tracks(const QJsonObject &source, const QString &type) {
+    QVariantList result;
+    for (const auto &value : source.value("MediaStreams").toArray()) {
+        const auto stream = value.toObject();
+        if (stream.value("Type").toString() != type || !stream.contains("Index")) continue;
+        QString label = stream.value("DisplayTitle").toString();
+        if (label.isEmpty()) {
+            QStringList parts;
+            for (const auto &key : {"Language", "Codec", "Title"}) {
+                const auto part = stream.value(key).toString();
+                if (!part.isEmpty()) parts.append(part);
+            }
+            label = parts.isEmpty() ? type + " " + QString::number(stream.value("Index").toInt()) : parts.join(" · ");
+        }
+        result.append(QVariantMap{{"index", stream.value("Index").toInt()}, {"label", label}});
+    }
+    return result;
+}
+QString Playback::mediaInfo(const QJsonObject &source) {
+    QStringList lines;
+    QStringList format;
+    const auto container = source.value("Container").toString().toUpper();
+    if (!container.isEmpty()) format.append(container);
+    if (source.value("Bitrate").toDouble() > 0) format.append(QString::number(source.value("Bitrate").toDouble() / 1000000, 'f', 1) + " Mbps");
+    if (source.value("Size").toDouble() > 0) format.append(QString::number(source.value("Size").toDouble() / 1073741824, 'f', 2) + " GiB");
+    if (!format.isEmpty()) lines.append(format.join(" · "));
+    for (const auto &value : source.value("MediaStreams").toArray()) {
+        const auto stream = value.toObject();
+        const auto type = stream.value("Type").toString();
+        if (type != "Video" && type != "Audio" && type != "Subtitle") continue;
+        QString label = stream.value("DisplayTitle").toString();
+        if (label.isEmpty()) {
+            QStringList parts;
+            const auto codec = stream.value("Codec").toString().toUpper();
+            if (!codec.isEmpty()) parts.append(codec);
+            if (stream.value("Width").toInt() > 0 && stream.value("Height").toInt() > 0)
+                parts.append(QString("%1×%2").arg(stream.value("Width").toInt()).arg(stream.value("Height").toInt()));
+            if (stream.value("Channels").toInt() > 0) parts.append(QString::number(stream.value("Channels").toInt()) + " ch");
+            const auto language = stream.value("Language").toString();
+            if (!language.isEmpty()) parts.append(language);
+            label = parts.join(" · ");
+        }
+        if (!label.isEmpty()) lines.append(type + ": " + label);
+    }
+    return lines.join('\n');
+}
+QVariantList Playback::segments(const QJsonObject &response) {
+    QVariantList result;
+    for (const auto &value : response.value("Items").toArray()) {
+        const auto segment = value.toObject();
+        const double start = segment.value("StartTicks").toDouble(-1) / 10000000;
+        const double end = segment.value("EndTicks").toDouble(-1) / 10000000;
+        const auto type = segment.value("Type").toString();
+        if (!std::isfinite(start) || !std::isfinite(end) || start < 0 || end <= start ||
+            !QStringList{"Intro", "Outro", "Recap", "Preview", "Commercial"}.contains(type)) continue;
+        result.append(QVariantMap{{"start", start}, {"end", end}, {"type", type}});
+    }
+    std::stable_sort(result.begin(), result.end(), [](const QVariant &a, const QVariant &b) {
+        return a.toMap().value("start").toDouble() < b.toMap().value("start").toDouble();
+    });
+    return result;
+}
+QVariantMap Playback::activeSegment(const QVariantList &segments, double position) {
+    for (const auto &value : segments) {
+        const auto segment = value.toMap();
+        if (position >= segment.value("start").toDouble() && position < segment.value("end").toDouble()) return segment;
+    }
+    return {};
 }

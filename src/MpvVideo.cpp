@@ -52,6 +52,8 @@ public:
             mpv_render_context_update(m_render);
             auto *fbo = framebufferObject();
             mpv_opengl_fbo target{int(fbo->handle()), fbo->width(), fbo->height(), 0};
+            // mpv's FBO output matches Qt Quick's texture orientation. Keep
+            // this flip and the item's mirrorVertically property disabled.
             int flip = 0;
             mpv_render_param params[] = {{MPV_RENDER_PARAM_OPENGL_FBO, &target}, {MPV_RENDER_PARAM_FLIP_Y, &flip}, {MPV_RENDER_PARAM_INVALID, nullptr}};
             mpv_render_context_render(m_render, params);

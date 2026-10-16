@@ -55,6 +55,44 @@ private slots:
         auto p = Playback::negotiate(response, QUrl("https://example.com"), "item", "device", "secret", "transcode", 0);
         QVERIFY(!p.valid()); QVERIFY(p.url.isEmpty()); QVERIFY(!p.error.contains("secret"));
     }
+    void selectedVersionIsRespected() {
+        const QJsonObject response{{"MediaSources", QJsonArray{
+            QJsonObject{{"Id", "original"}, {"SupportsDirectPlay", true}},
+            QJsonObject{{"Id", "alternate"}, {"SupportsDirectPlay", true}}}}};
+        const auto selected = Playback::negotiate(response, QUrl("https://example.com"), "item", "device", "token", "auto", 0, "alternate");
+        QVERIFY(selected.valid()); QCOMPARE(selected.mediaSourceId, "alternate");
+        QVERIFY(!Playback::negotiate(response, QUrl("https://example.com"), "item", "device", "token", "auto", 0, "missing").valid());
+    }
+    void segmentValidationAndBoundaries() {
+        const auto segments = Playback::segments({{"Items", QJsonArray{
+            QJsonObject{{"Type", "Outro"}, {"StartTicks", 2000000000}, {"EndTicks", 2200000000LL}},
+            QJsonObject{{"Type", "Intro"}, {"StartTicks", 100000000}, {"EndTicks", 300000000}},
+            QJsonObject{{"Type", "Intro"}, {"StartTicks", -1}, {"EndTicks", 300000000}},
+            QJsonObject{{"Type", "Recap"}, {"StartTicks", 100}, {"EndTicks", 50}},
+            QJsonObject{{"Type", "Unknown"}, {"StartTicks", 100}, {"EndTicks", 500}},
+            QJsonObject{{"Type", "Intro"}, {"EndTicks", 500}}}}});
+        QCOMPARE(segments.size(), 2);
+        QVERIFY(Playback::activeSegment(segments, 9.9).isEmpty());
+        QCOMPARE(Playback::activeSegment(segments, 10).value("type").toString(), "Intro");
+        QCOMPARE(Playback::activeSegment(segments, 29.9).value("end").toDouble(), 30.0);
+        QVERIFY(Playback::activeSegment(segments, 30).isEmpty());
+        QCOMPARE(Playback::activeSegment(segments, 200).value("type").toString(), "Outro");
+        QVERIFY(Playback::segments({}).isEmpty());
+    }
+    void sourceTracksAndInfo() {
+        const QJsonObject source{{"Container", "mkv"}, {"Bitrate", 8000000}, {"MediaStreams", QJsonArray{
+            QJsonObject{{"Type", "Video"}, {"Index", 0}, {"Codec", "hevc"}, {"Width", 1920}, {"Height", 1080}},
+            QJsonObject{{"Type", "Audio"}, {"Index", 2}, {"DisplayTitle", "English · AAC stereo"}},
+            QJsonObject{{"Type", "Subtitle"}, {"Index", 5}, {"Language", "tha"}, {"Codec", "srt"}}}}};
+        const auto audio = Playback::tracks(source, "Audio");
+        QCOMPARE(audio.size(), 1); QCOMPARE(audio[0].toMap()["index"].toInt(), 2);
+        QCOMPARE(audio[0].toMap()["label"].toString(), "English · AAC stereo");
+        QCOMPARE(Playback::tracks(source, "Subtitle")[0].toMap()["index"].toInt(), 5);
+        const auto info = Playback::mediaInfo(source);
+        QVERIFY(info.contains("MKV · 8.0 Mbps")); QVERIFY(info.contains("1920×1080"));
+        QVERIFY(info.contains("English · AAC stereo"));
+        QVERIFY(!info.contains("api_key"));
+    }
     void unavailableAndLive() {
         auto p = Playback::negotiate({}, QUrl("https://example.com"), "item", "device", "token", "direct", 0);
         QVERIFY(!p.valid()); QVERIFY(p.error.contains("Direct play"));

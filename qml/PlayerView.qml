@@ -1,0 +1,212 @@
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+import JFGamescope 1.0
+
+FocusScope {
+    id: playback
+    objectName: "playbackView"
+    property color accent: "#66c0f4"
+    property bool controlsVisible: true
+    property bool pauseScreenVisible: false
+    property bool popupClosing: false
+    readonly property bool isPaused: Player.active && Player.paused
+    readonly property var media: App.currentItem
+    readonly property string heading: media.seriesName || App.currentTitle
+    readonly property string episode: media.type === "Episode"
+        ? (media.seasonNumber !== undefined && media.seasonNumber !== null && media.episodeNumber !== undefined && media.episodeNumber !== null
+           ? "S" + media.seasonNumber + " · E" + media.episodeNumber + "  " : "") + App.currentTitle : ""
+    readonly property var segment: {
+        const position = Player.position
+        return App.mediaSegments.find(s => position >= s.start && position < s.end) || ({})
+    }
+    property date clockTime: new Date()
+    readonly property string endingTime: Player.duration > 0
+        ? new Date(clockTime.getTime() + Math.max(0, Player.duration - Player.position) * 1000).toLocaleTimeString(Qt.locale(), "hh:mm") : ""
+    visible: Player.active || App.playbackPending
+    onVisibleChanged: {
+        pauseScreenVisible = false
+        if (visible) { controlsVisible = true; focusVideo(); hideControls.restart() }
+        else { pauseDelay.stop(); hideControls.stop() }
+    }
+    onIsPausedChanged: {
+        pauseScreenVisible = false
+        if (isPaused) { pauseDelay.restart(); controlsVisible = true }
+        else { pauseDelay.stop(); if (visible) hideControls.restart() }
+    }
+    onActiveFocusChanged: if (activeFocus && isPaused && !pauseScreenVisible) pauseDelay.restart()
+    function time(seconds) {
+        const s = Math.max(0, Math.floor(seconds))
+        const minutes = Math.floor(s / 60) % 60
+        return (s >= 3600 ? Math.floor(s / 3600) + ":" + (minutes < 10 ? "0" : "") : "")
+            + (s >= 3600 ? minutes : Math.floor(s / 60)) + ":" + (s % 60 < 10 ? "0" : "") + s % 60
+    }
+    function activity() {
+        pauseScreenVisible = false; controlsVisible = true; hideControls.restart()
+        if (isPaused) pauseDelay.restart()
+    }
+    function focusVideo() {
+        const item = playback.Window.window.activeFocusItem
+        if (item && item !== playback) item.focus = false
+        playback.forceActiveFocus()
+    }
+    function hideOverlay() { controlsVisible = false; pauseScreenVisible = false; focusVideo(); if (isPaused) pauseDelay.restart() }
+    function back() {
+        if (pauseScreenVisible || controlsVisible) hideOverlay()
+        else App.stopPlayback()
+    }
+    function settings(section) {
+        activity(); trackPopup.open()
+        Qt.callLater(() => {
+            if (section === "audio") tracks.focusAudio()
+            else if (section === "subtitle") tracks.focusSubtitle()
+            else tracks.focusQuality()
+        })
+    }
+    Keys.onPressed: event => {
+        if (popupClosing || trackPopup.visible || infoPopup.visible) { event.accepted = true; return }
+        if (App.playbackPending && event.key !== Qt.Key_Escape) { event.accepted = true; return }
+        if (event.key === Qt.Key_Escape) back()
+        else if (event.key === Qt.Key_Up) hideOverlay()
+        else {
+            activity()
+            if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) Player.togglePause()
+            else if (event.key === Qt.Key_Left) App.seekRelative(-10)
+            else if (event.key === Qt.Key_Right) App.seekRelative(10)
+            else if (event.key === Qt.Key_Down) { if (skipButton.visible) skipButton.forceActiveFocus(); else audioButton.forceActiveFocus() }
+            else if (event.key === Qt.Key_I) infoPopup.open()
+            else return
+        }
+        event.accepted = true
+    }
+    Shortcut { sequence: "Space"; enabled: playback.visible && playback.activeFocus; onActivated: { playback.activity(); Player.togglePause() } }
+    Rectangle { anchors.fill: parent; color: "black" }
+    MpvVideo { anchors.fill: parent; player: Player; visible: Player.active }
+    MouseArea {
+        anchors.fill: parent; hoverEnabled: true
+        onPositionChanged: playback.activity()
+        onClicked: { playback.activity(); playback.focusVideo(); Player.togglePause() }
+    }
+    Column {
+        objectName: "bufferIndicator"
+        anchors.centerIn: parent; spacing: 8
+        visible: (Player.loading || App.playbackPending) && !playback.pauseScreenVisible
+        BusyIndicator { anchors.horizontalCenter: parent.horizontalCenter; running: parent.visible; width: 64; height: 64 }
+        Text { anchors.horizontalCenter: parent.horizontalCenter; text: App.playbackPending ? "Preparing…" : "Buffering" + (Player.bufferPercent > 0 ? " " + Player.bufferPercent + "%" : ""); color: "white"; font.pixelSize: 16 }
+    }
+    Rectangle {
+        id: pauseScreen
+        objectName: "pauseScreen"
+        anchors.fill: parent; color: "#c4080c12"
+        visible: playback.pauseScreenVisible
+        Column {
+            anchors { left: parent.left; right: parent.right; bottom: parent.bottom; margins: Math.max(32, playback.width * 0.065) }
+            spacing: 14
+            Text { text: "Paused"; color: "#b8bdc5"; font.pixelSize: 17 }
+            Text { width: parent.width; text: playback.heading; color: "white"; font.pixelSize: Math.min(46, playback.width * 0.045); font.weight: Font.Bold; wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight }
+            Text { width: parent.width; text: playback.episode; visible: text.length > 0; color: "#d6dae0"; font.pixelSize: 20; wrapMode: Text.Wrap }
+            Text { width: Math.min(parent.width, 720); text: playback.media.overview || ""; visible: text.length > 0; color: "#adb4bf"; font.pixelSize: 16; maximumLineCount: 3; elide: Text.ElideRight; wrapMode: Text.Wrap }
+            Text { text: playback.time(Player.position) + " / " + playback.time(Player.duration); color: "#adb4bf"; font.pixelSize: 14 }
+        }
+    }
+    Rectangle {
+        id: overlay
+        objectName: "playerOverlay"
+        anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+        height: overlayColumn.implicitHeight + 95
+        visible: playback.controlsVisible && !playback.pauseScreenVisible
+        gradient: Gradient { GradientStop { position: 0; color: "#00000000" } GradientStop { position: 0.45; color: "#d906101a" } GradientStop { position: 1; color: "#f5080c12" } }
+        ColumnLayout {
+            id: overlayColumn
+            anchors { left: parent.left; right: parent.right; bottom: parent.bottom; margins: 28 }
+            spacing: 10
+            Text { objectName: "playerTitle"; Layout.fillWidth: true; text: playback.heading; color: "white"; font.pixelSize: 25; font.weight: Font.DemiBold; elide: Text.ElideRight }
+            Text { objectName: "playerEpisode"; Layout.fillWidth: true; text: playback.episode; visible: text.length > 0; color: "#c3cbd4"; font.pixelSize: 16; elide: Text.ElideRight }
+            Rectangle {
+                Layout.fillWidth: true; implicitHeight: 5; color: "#454b53"
+                Rectangle { objectName: "bufferProgress"; height: parent.height; width: parent.width * Math.min(1, Player.duration > 0 ? Player.bufferedPosition / Player.duration : 0); color: "#9ba8b4" }
+                Rectangle { height: parent.height; width: parent.width * Math.min(1, Player.duration > 0 ? Player.position / Player.duration : 0); color: playback.accent }
+                MouseArea { anchors.fill: parent; anchors.margins: -9; onClicked: mouse => { playback.activity(); App.seekRelative(Math.max(0, Math.min(1, (mouse.x - 9) / (width - 18))) * Player.duration - Player.position) } }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Text { text: (Player.paused ? "Paused · " : "") + playback.time(Player.position) + " / " + playback.time(Player.duration); color: "#c3d7e4"; font.pixelSize: 14 }
+                Item { Layout.fillWidth: true }
+                Text { objectName: "endingTime"; visible: playback.endingTime.length > 0; text: "Ends at " + playback.endingTime; color: "#c3d7e4"; font.pixelSize: 14 }
+            }
+            RowLayout {
+                Layout.fillWidth: true; spacing: 8
+                NavButton { id: audioButton; objectName: "playerAudio"; text: "Audio"; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitWidth: 130; upTarget: playback; onNavigatedUp: playback.hideOverlay(); onClicked: playback.settings("audio") }
+                NavButton { objectName: "playerSubtitles"; text: "Subtitles"; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitWidth: 130; upTarget: playback; onNavigatedUp: playback.hideOverlay(); onClicked: playback.settings("subtitle") }
+                NavButton { objectName: "playerQuality"; text: "Quality"; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitWidth: 130; upTarget: playback; onNavigatedUp: playback.hideOverlay(); onClicked: playback.settings("quality") }
+                NavButton { objectName: "playerInfo"; text: "Info"; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitWidth: 100; upTarget: playback; onNavigatedUp: playback.hideOverlay(); onClicked: { playback.activity(); infoPopup.open() } }
+                NavButton { text: Player.paused ? "Resume" : "Pause"; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitWidth: 110; upTarget: playback; onNavigatedUp: playback.hideOverlay(); onClicked: { playback.activity(); Player.togglePause() } }
+                NavButton { text: "Stop"; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitWidth: 90; upTarget: playback; onNavigatedUp: playback.hideOverlay(); onClicked: App.stopPlayback() }
+            }
+        }
+    }
+    NavButton {
+        id: skipButton
+        objectName: "skipSegmentButton"
+        anchors { right: parent.right; bottom: parent.bottom; margins: 28; bottomMargin: overlay.visible ? overlay.height + 12 : 35 }
+        visible: !!playback.segment.type && !playback.pauseScreenVisible
+        text: "Skip " + ({Intro: "intro", Outro: "credits", Recap: "recap", Preview: "preview", Commercial: "commercial"})[playback.segment.type]
+        primary: true; accent: playback.accent
+        upTarget: playback; downTarget: audioButton
+        onNavigatedUp: playback.hideOverlay()
+        onClicked: { playback.activity(); App.skipSegment(); playback.focusVideo() }
+        onVisibleChanged: if (!visible && activeFocus) playback.focusVideo()
+    }
+    Timer { id: hideControls; interval: 4000; onTriggered: if (playback.Window.window.activeFocusItem === playback && !trackPopup.visible && !infoPopup.visible && !Player.paused) playback.controlsVisible = false }
+    Timer { id: pauseDelay; objectName: "pauseScreenTimer"; interval: 10000; onTriggered: if (playback.isPaused && playback.activeFocus && !trackPopup.visible && !infoPopup.visible) { playback.controlsVisible = false; playback.pauseScreenVisible = true; playback.focusVideo() } }
+    Timer { interval: 1000; repeat: true; running: playback.visible; onTriggered: playback.clockTime = new Date() }
+    Popup {
+        id: trackPopup
+        objectName: "playerTrackPopup"
+        parent: Overlay.overlay
+        width: Math.min(520, parent.width - 48); height: trackColumn.implicitHeight + 48
+        x: (parent.width - width) / 2; y: (parent.height - height) / 2
+        modal: true; focus: true; padding: 24; closePolicy: Popup.CloseOnEscape
+        onAboutToHide: playback.popupClosing = true
+        onClosed: Qt.callLater(() => { playback.hideOverlay(); playback.popupClosing = false })
+        background: Rectangle { color: "#15202d"; radius: 8; border.color: "#425263" }
+        contentItem: ColumnLayout {
+            id: trackColumn; spacing: 16
+            Text { text: "Playback"; color: "white"; font.pixelSize: 24; font.weight: Font.DemiBold }
+            PlaybackOptions {
+                id: tracks
+                namePrefix: "playing"; live: true; Layout.fillWidth: true
+                sources: [App.currentSource]
+                quality: App.playbackOptions.quality || 0
+                audio: App.playbackOptions.audio === undefined ? -2 : App.playbackOptions.audio
+                subtitle: App.playbackOptions.subtitle === undefined ? -2 : App.playbackOptions.subtitle
+                enabled: !App.playbackPending
+                onQualitySelected: value => { App.setQuality(value); trackPopup.close() }
+                onAudioSelected: value => { App.setPlaybackTrack(false, value); trackPopup.close() }
+                onSubtitleSelected: value => { App.setPlaybackTrack(true, value); trackPopup.close() }
+            }
+            NavButton { text: "Done"; Layout.fillWidth: true; onClicked: trackPopup.close() }
+        }
+    }
+    Popup {
+        id: infoPopup
+        objectName: "mediaInfoPopup"
+        parent: Overlay.overlay
+        width: Math.min(680, parent.width - 48); height: Math.min(520, parent.height - 48)
+        x: (parent.width - width) / 2; y: (parent.height - height) / 2
+        modal: true; focus: true; padding: 24; closePolicy: Popup.CloseOnEscape
+        onOpened: infoDone.forceActiveFocus()
+        onAboutToHide: playback.popupClosing = true
+        onClosed: Qt.callLater(() => { playback.hideOverlay(); playback.popupClosing = false })
+        background: Rectangle { color: "#15202d"; radius: 8; border.color: "#425263" }
+        contentItem: ColumnLayout {
+            spacing: 16
+            Text { text: "Media info"; color: "white"; font.pixelSize: 24; font.weight: Font.DemiBold }
+            ScrollView {
+                Layout.fillWidth: true; Layout.fillHeight: true; clip: true; contentWidth: availableWidth
+                Text { width: parent.width; text: (App.playMethod === "DirectPlay" ? "Direct play" : "Transcoding") + "\n" + (App.currentSource.mediaInfo || "") + "\n\nAudio: " + Player.audioTrack + "\nSubtitles: " + Player.subtitleTrack; color: "#c3cbd4"; font.pixelSize: 16; wrapMode: Text.Wrap }
+            }
+            NavButton { id: infoDone; text: "Done"; Layout.fillWidth: true; onClicked: infoPopup.close() }
+        }
+    }
+}
