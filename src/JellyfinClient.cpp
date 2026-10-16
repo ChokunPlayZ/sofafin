@@ -53,3 +53,13 @@ QString JellyfinClient::imageUrl(const QString &id, const QString &type, const Q
     url.setQuery(q);
     return url.toString(QUrl::FullyEncoded);
 }
+QString JellyfinClient::userImageUrl(const QString &id, const QString &tag) const {
+    if (id.isEmpty() || tag.isEmpty()) return {};
+    auto url = Playback::endpoint(m_server, "Users/" + QString::fromLatin1(QUrl::toPercentEncoding(id)) + "/Images/Primary");
+    QUrlQuery q;
+    q.addQueryItem("tag", tag);
+    q.addQueryItem("maxWidth", "96");
+    q.addQueryItem("api_key", m_token);
+    url.setQuery(q);
+    return url.toString(QUrl::FullyEncoded);
+}

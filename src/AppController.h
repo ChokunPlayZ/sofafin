@@ -12,6 +12,7 @@ class AppController : public QObject {
     Q_PROPERTY(bool busy READ busy NOTIFY changed)
     Q_PROPERTY(bool playbackPending READ playbackPending NOTIFY changed)
     Q_PROPERTY(QString username READ username NOTIFY changed)
+    Q_PROPERTY(QString profileImage READ profileImage NOTIFY changed)
     Q_PROPERTY(QString savedServer READ savedServer CONSTANT)
     Q_PROPERTY(QString savedUsername READ savedUsername CONSTANT)
     Q_PROPERTY(QString title READ title NOTIFY changed)
@@ -38,6 +39,7 @@ public:
     bool busy() const { return m_pending > 0 || m_negotiating; }
     bool playbackPending() const { return m_negotiating; }
     QString username() const { return m_username; }
+    QString profileImage() const { return m_profileImage; }
     QString savedServer() const { return m_settings->value("server").toString(); }
     QString savedUsername() const { return m_settings->value("username").toString(); }
     QString title() const { return m_title; }
@@ -100,15 +102,20 @@ private:
     void setError(const QString &error);
     void updateUserData(const QString &id, const QJsonObject &data);
     void changeUserData(const QVariantMap &item, bool value, bool favorite);
+    void fetchThemeSong();
+    void stopThemeSong();
     Settings *m_settings;
     MpvPlayer *m_player;
+    MpvPlayer *m_themePlayer;
     JellyfinClient m_api;
-    QString m_userId, m_username, m_title = "Home", m_message;
+    QString m_userId, m_username, m_profileImage, m_title = "Home", m_message;
     QVariantList m_shelves, m_libraries;
     QString m_pageParent, m_pageSearch, m_pageCategory;
     QString m_pageType, m_pageSeries, m_filter = "All", m_sort = "Name";
     QVariantMap m_detail;
     int m_detailGeneration = 0;
+    int m_themeGeneration = 0;
+    bool m_themeEnabled = true;
     bool m_detailLoading = false, m_updatingUserData = false;
     QList<QVariantMap> m_history;
     int m_generation = 0, m_pending = 0, m_loaded = 0, m_total = 0, m_playGeneration = 0;

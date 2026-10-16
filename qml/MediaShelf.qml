@@ -66,9 +66,6 @@ FocusScope {
                 Rectangle { anchors { bottom: parent.bottom; left: parent.left; right: parent.right; margins: 6 } height: 3; color: "#547083"; visible: card.modelData.progress > 0
                     Rectangle { height: parent.height; width: parent.width * Math.min(1, card.modelData.progress || 0); color: shelf.accent }
                 }
-                Rectangle { visible: card.modelData.folder; anchors { right: parent.right; top: parent.top; margins: 9 } width: 54; height: 22; radius: 3; color: "#c0101c27"
-                    Text { anchors.centerIn: parent; text: "OPEN"; font.pixelSize: 10; font.bold: true; color: "white" }
-                }
             }
             Text { y: shelf.cardHeight + 10; width: parent.width; text: card.modelData.title || ""; color: card.selected ? "white" : "#c5d5e2"; elide: Text.ElideRight; font.pixelSize: 15; font.weight: Font.DemiBold }
             Text { y: shelf.cardHeight + 31; width: parent.width; text: card.modelData.subtitle || ""; color: "#7892a6"; elide: Text.ElideRight; font.pixelSize: 11 }

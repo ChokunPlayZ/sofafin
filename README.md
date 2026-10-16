@@ -40,20 +40,25 @@ Installation is optional: `cmake --install build --prefix ~/.local` installs the
 | X | Space | Pause in the player |
 | Y | F | Search |
 | LB / RB | Page Up / Page Down | Home / server libraries |
-| Menu | F1 | Options |
+| Menu | F1 | Settings |
 | — | F11 | Toggle fullscreen |
 
-Press Down in the player to reach audio, subtitles, quality, and media info. Up or B hides the controls; B again stops playback. After ten seconds paused without input, the video dims and shows the title and episode. The controller can be disconnected and reconnected without restarting.
+Titles open on a full-screen detail page with backdrop artwork. B returns to the previous detail page or library. Series opens seasons, selecting a season opens its episodes, and selecting an episode opens its detail page. The Jellyfin profile image in the top-right corner opens Settings; an initial appears when no image is available.
+
+Theme songs supplied by the server play at reduced volume on detail pages, including inherited series themes for episodes. They stop when leaving the page or starting video and do not create video playback sessions. Disable them in **Settings → Theme songs**. Missing themes are ignored.
+
+Press Down in the player to reach pause, playback settings, and stop. Playback settings groups quality, audio, subtitles, and media info. Title details also has an expandable playback settings row for choosing options before playing; cast and chapters expand separately. Up or B hides the player controls; B again stops playback. After ten seconds paused without input, the video dims and shows the title and episode. The controller can be disconnected and reconnected without restarting.
 
 ## Implemented
 
 - Server sign-in, optional remembered sessions, and sign-out.
 - Server library names and order in the top navigation, with continue watching, next episodes, and recent titles for each video library.
 - Library/folder browsing, Movies and Shows catalogs, pagination, search, favorites/watched filters, and sorting by name, date added, or rating.
-- Server-fetched title details, ratings, genres, cast/crew, chapter playback, favorites, and watched/unwatched actions.
+- Full-screen title details with server-fetched ratings, genres, cast/crew, chapter playback, favorites, and watched/unwatched actions.
+- Jellyfin profile images and optional background theme songs, including series themes inherited by episodes.
 - Series → seasons → episodes browsing in server order, links from an episode to its series and season, and next-episode details.
 - Artwork chosen by image role and owner, landscape episode cards, and lazy loading with the server’s matching BlurHash as the placeholder.
-- Bounded, scrollable title dialogs with controller focus scrolling, including long titles at 800×500.
+- Scrollable detail pages with controller focus scrolling, including long titles at 800×500.
 - Direct play over authenticated HTTP and Jellyfin-negotiated HLS transcoding, selected using a libmpv device profile.
 - Resume, pause, seeking, buffer progress, estimated ending time, and series/episode information.
 - Quality, audio, subtitle, and media-version selection before playback; quality and track changes during playback preserve position and pause state.
@@ -74,7 +79,7 @@ Authentication and stream negotiation use Qt Network with verified TLS and same-
 ctest --test-dir build --output-on-failure
 ```
 
-Tests cover playback policy, media-version selection, base paths, token handling, malformed responses, expired/stale sessions, controller-style UI navigation, Steam keyboard requests and focus, artwork/BlurHash decoding and lazy loading, episode/series/season navigation, favorites and watched updates, small-screen modal bounds, server library tabs, exit/overlay controls, pause-screen timing, playback selections and segment handling, browsing/search/pagination, and actual libmpv decoding/pause/seek/resume of a generated local clip. The player test uses libmpv's software render API to run without a display; the application uses the OpenGL render API. The loopback HTTP test reports a skip if the execution environment forbids sockets.
+Tests cover playback policy, media-version selection, base paths, token handling, malformed responses, expired/stale sessions, controller-style UI navigation, Steam keyboard requests and focus, artwork/BlurHash decoding and lazy loading, full-screen episode/series/season navigation, favorites and watched updates, small-screen detail bounds, profile image loading, theme audio playback and cancellation, server library tabs, exit/overlay controls, pause-screen timing, playback selections and segment handling, browsing/search/pagination, and actual libmpv decoding/pause/seek/resume of a generated local clip. The player test uses libmpv's software render API to run without a display; the application uses the OpenGL render API. The loopback HTTP test reports a skip if the execution environment forbids sockets.
 
 The Linux `playback-startup` regression test starts and restarts an H.264 clip with hardware decoding enabled. A test-only libavutil guard makes hardware devices unavailable and terminates the child if it probes Vulkan, verifying software fallback without requiring a GPU or Gamescope. The old automatic decoder policy fails this test.
 
@@ -104,4 +109,4 @@ Known limits: no Quick Connect, automatic next-episode playback, HDR certificati
 
 Protocol/rendering references: [Jellyfin Media Segments API](https://github.com/jellyfin/jellyfin/blob/master/Jellyfin.Api/Controllers/MediaSegmentsController.cs), [playback selection fields](https://github.com/jellyfin/jellyfin/blob/master/Jellyfin.Api/Models/MediaInfoDtos/PlaybackInfoDto.cs), [mpv cache and track properties](https://mpv.io/manual/stable/), [Jellyfin transcoding](https://jellyfin.org/docs/general/post-install/transcoding/), [Jellyfin PlaybackInfo controller](https://github.com/jellyfin/jellyfin/blob/master/Jellyfin.Api/Controllers/MediaInfoController.cs), [libmpv render API](https://github.com/mpv-player/mpv/blob/master/include/mpv/render.h), [Qt framebuffer integration](https://doc.qt.io/qt-6/qquickframebufferobject.html).
 
-Steam keyboard integration follows the [SDL Steam Deck implementation](https://github.com/libsdl-org/SDL/blob/SDL2/src/video/x11/SDL_x11keyboard.c). Episode ordering and navigation follow Jellyfin’s [TV Shows API](https://github.com/jellyfin/jellyfin/blob/master/Jellyfin.Api/Controllers/TvShowsController.cs).
+Steam keyboard integration follows the [SDL Steam Deck implementation](https://github.com/libsdl-org/SDL/blob/SDL2/src/video/x11/SDL_x11keyboard.c). Episode ordering and navigation follow Jellyfin’s [TV Shows API](https://github.com/jellyfin/jellyfin/blob/master/Jellyfin.Api/Controllers/TvShowsController.cs). Theme songs use Jellyfin’s [theme media endpoint](https://github.com/jellyfin/jellyfin/blob/master/Jellyfin.Api/Controllers/LibraryController.cs); profile pictures use its [user image endpoint](https://github.com/jellyfin/jellyfin/blob/master/Jellyfin.Api/Controllers/ImageController.cs).
