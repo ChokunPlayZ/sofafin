@@ -18,7 +18,7 @@ public:
     bool hardwareDecoding() const { return m_store.value("hardwareDecoding", true).toBool(); }
     bool themeSongs() const { return m_store.value("themeSongs", true).toBool(); }
     int themeSongVolume() const { return qBound(0, m_store.value("themeSongVolume", 70).toInt(), 100); }
-    double uiScale() const { return m_store.value("uiScale", 1.0).toDouble(); }
+    double uiScale() const { return qBound(0.75, m_store.value("uiScale", 1.0).toDouble(), 1.5); }
     int bitrate() const { return m_store.value("bitrate", 120000000).toInt(); }
     QString playbackMode() const { return m_store.value("playbackMode", "auto").toString(); }
     QString accent() const { return m_store.value("accent", "#66c0f4").toString(); }

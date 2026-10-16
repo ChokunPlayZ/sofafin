@@ -6,6 +6,7 @@ Item {
     property string blurHash: ""
     property bool load: true
     property int fillMode: Image.PreserveAspectCrop
+    readonly property real uiFactor: Window.window && Window.window.uiFactor !== undefined ? Window.window.uiFactor : 1
     readonly property int status: fullImage.status
     clip: true
     Rectangle { anchors.fill: parent; color: "#22394d" }
@@ -17,11 +18,12 @@ Item {
         asynchronous: true
         visible: fullImage.status !== Image.Ready
     }
+    SkeletonBlock { anchors.fill: parent; visible: artwork.load && artwork.url.length > 0 && !artwork.blurHash && fullImage.status === Image.Loading }
     Image {
         id: fullImage
         anchors.fill: parent
         source: artwork.load ? artwork.url : ""
-        sourceSize: Qt.size(Math.max(1, Math.ceil(artwork.width * Screen.devicePixelRatio)), Math.max(1, Math.ceil(artwork.height * Screen.devicePixelRatio)))
+        sourceSize: Qt.size(Math.max(1, Math.ceil(artwork.width * artwork.uiFactor * Screen.devicePixelRatio)), Math.max(1, Math.ceil(artwork.height * artwork.uiFactor * Screen.devicePixelRatio)))
         asynchronous: true
         cache: true
         fillMode: artwork.fillMode

@@ -30,10 +30,17 @@ QUrl ControllerInput::keyboardUrl(const QRect &field) {
 bool ControllerInput::showKeyboard(int x, int y, int width, int height) {
     return QDesktopServices::openUrl(keyboardUrl(QRect(x, y, width, height)));
 }
+void ControllerInput::setTimelineMode(bool enabled) {
+    if (m_timelineMode == enabled) return;
+    m_timelineMode = enabled;
+    m_held.remove(Qt::Key_Left); m_held.remove(Qt::Key_Right); m_axisX = 0;
+    emit timelineModeChanged();
+}
 void ControllerInput::refresh() {
     if (m_controller && SDL_GameControllerGetAttached(m_controller)) return;
     if (m_controller) SDL_GameControllerClose(m_controller);
     m_controller = nullptr; m_held.clear(); m_axisX = m_axisY = 0;
+    m_horizontalAxis = 0; emit axisChanged();
     for (int i = 0; i < SDL_NumJoysticks(); ++i) {
         if (SDL_IsGameController(i)) { m_controller = SDL_GameControllerOpen(i); if (m_controller) break; }
     }
@@ -84,6 +91,12 @@ void ControllerInput::poll() {
             if (key) held(key, e.type == SDL_CONTROLLERBUTTONDOWN);
         }
         if (e.type == SDL_CONTROLLERAXISMOTION && e.caxis.which == id && e.caxis.axis <= SDL_CONTROLLER_AXIS_LEFTY) {
+            if (e.caxis.axis == SDL_CONTROLLER_AXIS_LEFTX) {
+                const double axis = qBound(-1.0, double(e.caxis.value) / 32767.0, 1.0);
+                m_horizontalAxis = qAbs(axis) < 0.2 ? 0 : axis;
+                emit axisChanged();
+                if (m_timelineMode) continue;
+            }
             int &old = e.caxis.axis == SDL_CONTROLLER_AXIS_LEFTX ? m_axisX : m_axisY;
             const int direction = e.caxis.value < -16000 ? -1 : e.caxis.value > 16000 ? 1 : qAbs(e.caxis.value) < 10000 ? 0 : old;
             if (old != direction) {
@@ -92,6 +105,12 @@ void ControllerInput::poll() {
                 held(negative, direction == -1); held(positive, direction == 1); old = direction;
             }
         }
+    }
+    const auto *window = QGuiApplication::focusWindow();
+    if (!window || !window->isActive()) {
+        m_held.clear();
+        if (m_horizontalAxis != 0) { m_horizontalAxis = 0; emit axisChanged(); }
+        return;
     }
     for (auto it = m_held.begin(); it != m_held.end(); ++it) {
         if (now >= it.value() && it.key() >= Qt::Key_Left && it.key() <= Qt::Key_Down) { press(it.key(), true); it.value() = now + 95; }

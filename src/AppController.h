@@ -9,6 +9,7 @@
 class AppController : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool signedIn READ signedIn NOTIFY changed)
+    Q_PROPERTY(bool authenticating READ authenticating NOTIFY changed)
     Q_PROPERTY(bool busy READ busy NOTIFY changed)
     Q_PROPERTY(bool playbackPending READ playbackPending NOTIFY changed)
     Q_PROPERTY(QString username READ username NOTIFY changed)
@@ -36,6 +37,7 @@ class AppController : public QObject {
 public:
     AppController(Settings *settings, MpvPlayer *player, QObject *parent = nullptr, QNetworkAccessManager *transport = nullptr);
     bool signedIn() const { return !m_userId.isEmpty(); }
+    bool authenticating() const { return m_authenticating; }
     bool busy() const { return m_pending > 0 || m_negotiating; }
     bool playbackPending() const { return m_negotiating; }
     QString username() const { return m_username; }
@@ -83,6 +85,7 @@ public:
     Q_INVOKABLE void skipSegment();
     Q_INVOKABLE void stopPlayback();
     Q_INVOKABLE void seekRelative(double seconds);
+    Q_INVOKABLE QVariantMap trickplayFrame(double seconds) const;
     Q_INVOKABLE void clearMessage() { m_message.clear(); emit changed(); }
     Q_INVOKABLE void notify(const QString &message) { m_message = message; emit changed(); }
 signals:
@@ -116,6 +119,8 @@ private:
     QVariantMap m_detail;
     int m_detailGeneration = 0;
     int m_themeGeneration = 0;
+    QString m_themeContext, m_themeSongId;
+    bool m_authenticating = false;
     bool m_themeEnabled = true;
     bool m_detailLoading = false, m_updatingUserData = false;
     QList<QVariantMap> m_history;

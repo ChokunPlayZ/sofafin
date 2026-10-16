@@ -8,6 +8,8 @@ const QString fields = "Overview,Genres,PrimaryImageAspectRatio,ParentId,ChildCo
 QVariantMap sourceDetails(const QJsonObject &source) {
     return {{"id", source.value("Id").toString()}, {"name", source.value("Name").toString("Original")},
         {"audioTracks", Playback::tracks(source, "Audio")}, {"subtitleTracks", Playback::tracks(source, "Subtitle")},
+        {"defaultAudio", source.value("DefaultAudioStreamIndex").toInt(-2)},
+        {"defaultSubtitle", source.value("DefaultSubtitleStreamIndex").toInt(-1)},
         {"mediaInfo", Playback::mediaInfo(source)}};
 }
 QUrlQuery query(std::initializer_list<std::pair<QString, QString>> values) {
@@ -21,6 +23,7 @@ AppController::AppController(Settings *settings, MpvPlayer *player, QObject *par
     m_themePlayer->setObjectName("themePlayer");
     m_themePlayer->setVolume(settings->themeSongVolume());
     m_themeEnabled = settings->themeSongs();
+    m_authenticating = !settings->value("accessToken").toString().isEmpty() && !settings->value("userId").toString().isEmpty();
     connect(settings, &Settings::changed, this, [this] {
         m_themePlayer->setVolume(m_settings->themeSongVolume());
         if (m_themeEnabled == m_settings->themeSongs()) return;
@@ -64,10 +67,12 @@ AppController::AppController(Settings *settings, MpvPlayer *player, QObject *par
 void AppController::start() {
     const auto token = m_settings->value("accessToken").toString();
     const auto userId = m_settings->value("userId").toString();
-    if (token.isEmpty() || userId.isEmpty()) return;
+    if (token.isEmpty() || userId.isEmpty()) { m_authenticating = false; emit changed(); return; }
+    m_authenticating = true;
     m_api.configure(QUrl(savedServer()), token); m_pending = 1; emit changed();
     m_api.get("Users/Me", {}, [this, userId](const QJsonObject &user, const QString &error) {
         m_pending = 0;
+        m_authenticating = false;
         if (!error.isEmpty()) { setError(error); return; }
         m_userId = user.value("Id").toString(userId); m_username = user.value("Name").toString(savedUsername());
         m_profileImage = m_api.userImageUrl(m_userId, user.value("PrimaryImageTag").toString()); home();
@@ -80,10 +85,11 @@ void AppController::login(const QString &server, const QString &username, const 
         setError("Enter a full server address, such as http://192.168.1.10:8096 or https://media.example.com/jellyfin."); return;
     }
     if (username.trimmed().isEmpty()) { setError("Enter your Jellyfin username."); return; }
-    m_api.configure(url); m_pending = 1; m_message.clear(); emit changed();
+    m_api.configure(url); m_pending = 1; m_authenticating = true; m_message.clear(); emit changed();
     m_api.post("Users/AuthenticateByName", {{"Username", username.trimmed()}, {"Pw", password}},
         [this, url, remember](const QJsonObject &result, const QString &error) {
         m_pending = 0;
+        m_authenticating = false;
         if (!error.isEmpty()) { setError(error); return; }
         const auto user = result.value("User").toObject(); const auto token = result.value("AccessToken").toString();
         if (token.isEmpty() || user.value("Id").toString().isEmpty()) { setError("The server did not return a valid session."); return; }
@@ -98,7 +104,7 @@ void AppController::login(const QString &server, const QString &username, const 
 void AppController::logout() {
     stopPlayback();
     m_api.post("Sessions/Logout", {});
-    closeDetails(); m_updatingUserData = false; ++m_generation; m_pending = 0; m_userId.clear(); m_username.clear(); m_profileImage.clear(); m_shelves.clear(); m_libraries.clear(); m_history.clear();
+    closeDetails(); m_authenticating = false; m_updatingUserData = false; ++m_generation; m_pending = 0; m_userId.clear(); m_username.clear(); m_profileImage.clear(); m_shelves.clear(); m_libraries.clear(); m_history.clear();
     m_settings->clearSession(); m_api.configure({}); emit shelvesChanged(); emit librariesChanged(); emit changed();
 }
 void AppController::setError(const QString &error) { m_message = error; emit changed(); }
@@ -160,13 +166,13 @@ QVariantMap AppController::normalize(const QJsonObject &o) const {
     return {{"id", id}, {"title", o.value("Name").toString()}, {"subtitle", subtitle}, {"type", type},
         {"overview", o.value("Overview").toString()}, {"runtime", ticks / 10000000}, {"positionTicks", position},
         {"progress", ticks > 0 ? qBound(0.0, position / ticks, 1.0) : 0},
-        {"poster", m_api.imageUrl(posterId, posterType, posterTag, aspect > 1 ? 640 : 400)},
+        {"poster", m_api.imageUrl(posterId, posterType, posterTag, aspect > 1 ? 1280 : 640)},
         {"posterBlurHash", hash(posterType, posterTag)}, {"imageAspect", aspect},
-        {"backdrop", m_api.imageUrl(backdropId, backdropType == "Backdrop" ? "Backdrop/0" : backdropType, backdropTag, 1280)},
+        {"backdrop", m_api.imageUrl(backdropId, backdropType == "Backdrop" ? "Backdrop/0" : backdropType, backdropTag, 3840)},
         {"backdropBlurHash", hash(backdropType, backdropTag)},
         {"seriesId", o.value("SeriesId").toString()}, {"seriesName", o.value("SeriesName").toString()},
         {"seasonNumber", o.value("ParentIndexNumber").toVariant()}, {"episodeNumber", o.value("IndexNumber").toVariant()},
-        {"collectionType", o.value("CollectionType").toString()}, {"mediaSources", sources},
+        {"collectionType", o.value("CollectionType").toString()}, {"mediaSources", sources}, {"trickplay", o.value("Trickplay").toObject().toVariantMap()},
         {"seasonId", o.value("SeasonId").toString()}, {"seasonName", o.value("SeasonName").toString()},
         {"played", data.value("Played").toBool()}, {"favorite", data.value("IsFavorite").toBool()},
         {"rating", o.value("OfficialRating").toString()}, {"communityRating", o.value("CommunityRating").toDouble()},
@@ -189,11 +195,11 @@ void AppController::home(const QString &category) {
     if (category != "Home") { fetchPage(); return; }
     m_pending = 3; const int generation = m_generation;
     for (const auto &title : {"Continue watching", "Up next"})
-        m_shelves.append(QVariantMap{{"title", title}, {"items", QVariantList{}}});
+        m_shelves.append(QVariantMap{{"title", title}, {"items", QVariantList{}}, {"loading", true}});
     emit shelvesChanged();
     const auto done = [this, generation](int index, const QJsonObject &result, const QString &error) {
         if (generation != m_generation) return;
-        auto shelf = m_shelves[index].toMap(); shelf["items"] = items(result); m_shelves[index] = shelf;
+        auto shelf = m_shelves[index].toMap(); shelf["items"] = items(result); shelf["loading"] = false; m_shelves[index] = shelf;
         --m_pending; if (!error.isEmpty()) m_message = error;
         emit shelvesChanged(); emit changed(); if (m_pending == 0) emit browsingReady();
     };
@@ -207,7 +213,7 @@ void AppController::home(const QString &category) {
             if (!QStringList{"", "movies", "tvshows", "homevideos", "musicvideos", "boxsets"}.contains(type)) continue;
             m_libraries.append(library);
             const int index = m_shelves.size();
-            m_shelves.append(QVariantMap{{"title", "Recently added · " + library.value("title").toString()}, {"items", QVariantList{}}});
+            m_shelves.append(QVariantMap{{"title", "Recently added · " + library.value("title").toString()}, {"items", QVariantList{}}, {"loading", true}});
             ++m_pending;
             m_api.get("Users/" + m_userId + "/Items", query({{"ParentId", library.value("id").toString()},
                 {"Recursive", "true"}, {"IncludeItemTypes", type == "tvshows" ? "Series" : type == "movies" ? "Movie" : "Movie,Series,Video,MusicVideo"},
@@ -218,8 +224,8 @@ void AppController::home(const QString &category) {
         emit librariesChanged(); emit shelvesChanged(); emit changed();
         if (m_pending == 0) emit browsingReady();
     });
-    m_api.get("Users/" + m_userId + "/Items/Resume", query({{"Limit", "20"}, {"Fields", fields}, {"MediaTypes", "Video"}}), [done](const auto &r, const auto &e) { done(0, r, e); });
-    m_api.get("Shows/NextUp", query({{"UserId", m_userId}, {"Limit", "20"}, {"Fields", fields}}), [done](const auto &r, const auto &e) { done(1, r, e); });
+    m_api.get("Users/" + m_userId + "/Items/Resume", query({{"Limit", "20"}, {"IsMissing", "false"}, {"Fields", fields}, {"MediaTypes", "Video"}}), [done](const auto &r, const auto &e) { done(0, r, e); });
+    m_api.get("Shows/NextUp", query({{"UserId", m_userId}, {"Limit", "20"}, {"IsMissing", "false"}, {"Fields", fields}}), [done](const auto &r, const auto &e) { done(1, r, e); });
 }
 void AppController::open(const QVariantMap &item) {
     if (!item.value("folder").toBool()) return;
@@ -257,7 +263,11 @@ void AppController::search(const QString &text) {
 void AppController::loadMore() { if (!busy() && hasMore()) fetchPage(true); }
 void AppController::showDetails(const QVariantMap &item) {
     if (!signedIn() || item.value("id").toString().isEmpty()) return;
-    stopThemeSong();
+    // Invalidate old requests without interrupting the inherited series theme.
+    ++m_themeGeneration;
+    auto context = item.value("seriesId").toString();
+    if (context.isEmpty()) context = item.value("id").toString();
+    if (!m_themeContext.isEmpty() && context != m_themeContext) stopThemeSong();
     const int generation = ++m_detailGeneration;
     m_detail = item; m_detailLoading = true; emit detailsChanged();
     m_api.get("Users/" + m_userId + "/Items/" + item.value("id").toString(),
@@ -265,7 +275,7 @@ void AppController::showDetails(const QVariantMap &item) {
         [this, generation](const QJsonObject &result, const QString &error) {
         if (generation != m_detailGeneration) return;
         m_detailLoading = false;
-        if (!error.isEmpty()) { emit detailsChanged(); setError(error); return; }
+        if (!error.isEmpty()) { stopThemeSong(); emit detailsChanged(); setError(error); return; }
         if (result.value("Id").toString() != m_detail.value("id").toString()) {
             emit detailsChanged(); setError("The server did not return the requested title."); return;
         }
@@ -295,7 +305,7 @@ void AppController::fetchDetailSeasons(int generation) {
         for (const auto &value : items(result)) {
             const auto season = value.toMap();
             if (!season.value("id").toString().isEmpty())
-                seasons->append(QVariantMap{{"id", season.value("id")}, {"title", season.value("title")}, {"items", QVariantList{}}});
+                seasons->append(QVariantMap{{"id", season.value("id")}, {"title", season.value("title")}, {"items", QVariantList{}}, {"loading", true}});
         }
         if (!error.isEmpty() || seasons->isEmpty()) {
             m_detail["seasonsLoading"] = false;
@@ -304,6 +314,8 @@ void AppController::fetchDetailSeasons(int generation) {
             emit detailsChanged(); return;
         }
         auto pending = std::make_shared<int>(seasons->size());
+        m_detail["seasons"] = *seasons;
+        emit detailsChanged();
         for (int index = 0; index < seasons->size(); ++index) {
             const auto seasonId = seasons->at(index).toMap().value("id").toString();
             m_api.get("Shows/" + seriesId + "/Episodes",
@@ -313,10 +325,10 @@ void AppController::fetchDetailSeasons(int generation) {
                 auto section = seasons->at(index).toMap();
                 section["items"] = e.isEmpty() ? items(r) : QVariantList{};
                 section["error"] = e;
+                section["loading"] = false;
                 (*seasons)[index] = section;
-                if (--*pending > 0) return;
                 m_detail["seasons"] = *seasons;
-                m_detail["seasonsLoading"] = false;
+                m_detail["seasonsLoading"] = --*pending > 0;
                 emit detailsChanged();
             });
         }
@@ -328,6 +340,7 @@ void AppController::closeDetails() {
 }
 void AppController::stopThemeSong() {
     ++m_themeGeneration;
+    m_themeContext.clear(); m_themeSongId.clear();
     m_themePlayer->stop();
 }
 void AppController::fetchThemeSong() {
@@ -337,12 +350,16 @@ void AppController::fetchThemeSong() {
     m_api.get("Items/" + QString::fromLatin1(QUrl::toPercentEncoding(id)) + "/ThemeSongs",
         query({{"UserId", m_userId}, {"InheritFromParent", "true"}}),
         [this, generation](const QJsonObject &result, const QString &error) {
-        if (generation != m_themeGeneration || !error.isEmpty() || !m_settings->themeSongs() || m_player->active() || m_negotiating) return;
+        if (generation != m_themeGeneration || !m_settings->themeSongs() || m_player->active() || m_negotiating) return;
         // Theme media is optional; missing or unplayable themes must not interrupt browsing.
         const auto songs = result.value("Items").toArray();
-        if (songs.isEmpty()) return;
+        if (!error.isEmpty() || songs.isEmpty()) { stopThemeSong(); return; }
         const auto songId = songs.first().toObject().value("Id").toString();
-        if (songId.isEmpty()) return;
+        if (songId.isEmpty()) { stopThemeSong(); return; }
+        m_themeContext = m_detail.value("seriesId").toString();
+        if (m_themeContext.isEmpty()) m_themeContext = m_detail.value("id").toString();
+        if (songId == m_themeSongId) return;
+        m_themeSongId = songId;
         auto url = Playback::endpoint(m_api.server(), "Audio/" + QString::fromLatin1(QUrl::toPercentEncoding(songId)) + "/stream");
         url.setQuery(query({{"static", "true"}, {"api_key", m_api.token()}}));
         m_themePlayer->load(url, 0, 0, 0, false);
@@ -406,8 +423,8 @@ void AppController::updateUserData(const QString &id, const QJsonObject &data) {
 }
 void AppController::fetchPage(bool append) {
     const int generation = m_generation; m_pending = 1;
-    if (!append) { m_shelves = {QVariantMap{{"title", m_title}, {"items", QVariantList{}}}}; emit shelvesChanged(); }
-    auto q = query({{"Fields", fields}, {"Limit", "60"}, {"StartIndex", QString::number(m_loaded)}, {"SortBy", "SortName"}, {"SortOrder", "Ascending"}});
+    if (!append) { m_shelves = {QVariantMap{{"title", m_title}, {"items", QVariantList{}}, {"loading", true}}}; emit shelvesChanged(); }
+    auto q = query({{"Fields", fields}, {"Limit", "60"}, {"StartIndex", QString::number(m_loaded)}, {"IsMissing", "false"}, {"SortBy", "SortName"}, {"SortOrder", "Ascending"}});
     if (!m_pageParent.isEmpty()) { q.addQueryItem("ParentId", m_pageParent); q.addQueryItem("Recursive", "false"); }
     else { q.addQueryItem("Recursive", "true"); q.addQueryItem("IncludeItemTypes", m_pageCategory == "Movies" ? "Movie" : m_pageCategory == "Shows" ? "Series" : "Movie,Series,Episode"); }
     if (!m_pageSearch.isEmpty()) q.addQueryItem("SearchTerm", m_pageSearch);
@@ -424,10 +441,12 @@ void AppController::fetchPage(bool append) {
     m_api.get(path, q, [this, generation, append](const QJsonObject &r, const QString &e) {
         if (generation != m_generation) return;
         m_pending = 0;
+        auto shelf = m_shelves.first().toMap(); shelf["loading"] = false; m_shelves[0] = shelf;
+        emit shelvesChanged();
         if (!e.isEmpty()) { setError(e); return; }
         const auto page = items(r); m_loaded += page.size(); m_total = r.value("TotalRecordCount").toInt(m_loaded);
         if (page.isEmpty()) m_total = m_loaded;
-        auto shelf = m_shelves.first().toMap(); auto list = append ? shelf.value("items").toList() : QVariantList{};
+        auto list = append ? shelf.value("items").toList() : QVariantList{};
         list.append(page); shelf["items"] = list; m_shelves[0] = shelf; emit shelvesChanged(); emit changed(); emit browsingReady();
     });
 }
@@ -520,4 +539,24 @@ void AppController::seekRelative(double seconds) {
     const double target = qBound(0.0, m_player->position() + seconds, qMax(0.0, m_player->duration() - 1));
     if (m_plan.method == "Transcode") beginPlay(m_currentItem, qint64(target * 10000000), m_player->paused());
     else m_player->seek(target);
+}
+QVariantMap AppController::trickplayFrame(double seconds) const {
+    const auto versions = m_currentItem.value("trickplay").toMap();
+    auto sizes = versions.value(m_plan.mediaSourceId).toMap();
+    QVariantMap info;
+    // Use the smallest available thumbnail to keep scrubbing responsive.
+    for (const auto &value : sizes) {
+        const auto candidate = value.toMap();
+        if (candidate.value("Width").toInt() > 0 && (info.isEmpty() || candidate.value("Width").toInt() < info.value("Width").toInt())) info = candidate;
+    }
+    const int columns = info.value("TileWidth").toInt(), rows = info.value("TileHeight").toInt();
+    const int interval = info.value("Interval").toInt(), count = info.value("ThumbnailCount").toInt();
+    const int width = info.value("Width").toInt(), height = info.value("Height").toInt();
+    if (columns <= 0 || rows <= 0 || interval <= 0 || count <= 0 || width <= 0 || height <= 0) return {};
+    const qint64 frame = qBound(qint64(0), qint64(qMax(0.0, seconds) * 1000 / interval), qint64(count - 1));
+    const qint64 perSheet = qint64(columns) * rows;
+    auto url = Playback::endpoint(m_api.server(), "Videos/" + m_currentItem.value("id").toString() + "/Trickplay/" + QString::number(width) + "/" + QString::number(frame / perSheet) + ".jpg");
+    url.setQuery(query({{"ApiKey", m_api.token()}, {"MediaSourceId", m_plan.mediaSourceId}}));
+    return {{"url", url.toString(QUrl::FullyEncoded)}, {"width", width}, {"height", height},
+        {"columns", columns}, {"rows", rows}, {"column", frame % perSheet % columns}, {"row", frame % perSheet / columns}};
 }

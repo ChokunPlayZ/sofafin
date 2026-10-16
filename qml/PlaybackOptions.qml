@@ -25,6 +25,14 @@ ColumnLayout {
     spacing: 8
     onMediaIdChanged: { sourceIndex = 0; quality = 0; audio = -2; subtitle = -2 }
     function indexFor(model, value) { const index = model.findIndex(track => track.index === value); return Math.max(0, index) }
+    function automaticLabel(subtitle) {
+        const index = subtitle ? source.defaultSubtitle : source.defaultAudio
+        const list = subtitle ? source.subtitleTracks || [] : source.audioTracks || []
+        const track = list.find(t => t.index === index)
+        const actual = live ? (subtitle ? Player.subtitleTrack : Player.audioTrack) : ""
+        const label = track ? track.label : index === -1 || (subtitle && !list.length) ? "Off" : actual && actual !== "Auto" ? actual : !subtitle && list.length ? list[0].label : "Server preference"
+        return "Automatic · " + label
+    }
     function focusQuality() { qualityBox.forceActiveFocus() }
     function focusAudio() { audioBox.forceActiveFocus() }
     function focusSubtitle() { subtitleBox.forceActiveFocus() }
@@ -56,7 +64,7 @@ ColumnLayout {
         id: audioBox
         objectName: panel.namePrefix + "Audio"
         Layout.fillWidth: true; implicitHeight: 44
-        model: [{label: "Automatic", index: -2}].concat(panel.source.audioTracks || [])
+        model: [{label: panel.automaticLabel(false), index: -2}].concat(panel.source.audioTracks || [])
         textRole: "label"; displayText: "Audio · " + currentText
         currentIndex: panel.indexFor(model, panel.audio)
         onActivated: index => { const value = model[index].index; if (!panel.live) panel.audio = value; panel.audioSelected(value) }
@@ -68,7 +76,7 @@ ColumnLayout {
         id: subtitleBox
         objectName: panel.namePrefix + "Subtitle"
         Layout.fillWidth: true; implicitHeight: 44
-        model: [{label: "Automatic", index: -2}, {label: "Off", index: -1}].concat(panel.source.subtitleTracks || [])
+        model: [{label: panel.automaticLabel(true), index: -2}, {label: "Off", index: -1}].concat(panel.source.subtitleTracks || [])
         textRole: "label"; displayText: "Subtitles · " + currentText
         currentIndex: panel.indexFor(model, panel.subtitle)
         onActivated: index => { const value = model[index].index; if (!panel.live) panel.subtitle = value; panel.subtitleSelected(value) }

@@ -17,6 +17,9 @@ Button {
     activeFocusOnTab: true
     hoverEnabled: true
     opacity: enabled ? 1 : 0.45
+    ToolTip.visible: hovered && text.length > 45
+    ToolTip.text: text
+    ToolTip.delay: 600
     Accessible.name: text + (value.length ? ": " + value : "")
     font.pixelSize: 16
     contentItem: Item {

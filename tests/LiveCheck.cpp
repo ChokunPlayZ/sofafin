@@ -71,7 +71,7 @@ int main(int argc, char **argv) {
             api.get("Users/" + user + "/Views", {}, [&](const QJsonObject &views, const QString &error) {
                 if (!error.isEmpty()) { fail(error); return; }
                 std::printf("PASS: library browsing (%lld libraries)\n", static_cast<long long>(views["Items"].toArray().size()));
-                QUrlQuery q; q.addQueryItem("Recursive", "true"); q.addQueryItem("IncludeItemTypes", "Movie,Episode"); q.addQueryItem("Limit", "1");
+                QUrlQuery q; q.addQueryItem("Recursive", "true"); q.addQueryItem("IncludeItemTypes", "Movie,Episode"); q.addQueryItem("Limit", "1"); q.addQueryItem("IsMissing", "false");
                 api.get("Users/" + user + "/Items", q, [&](const QJsonObject &items, const QString &error) {
                     if (!error.isEmpty()) { fail(error); return; }
                     const auto list = items["Items"].toArray();

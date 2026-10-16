@@ -2,7 +2,7 @@
 
 A native, controller-first Jellyfin client for Steam Deck, with a Steam Big Picture-inspired interface. C++20, Qt 6 Quick, SDL2 input, and embedded libmpv video. Qt renders the interface directly; there is no browser or webview.
 
-This is an early working foundation. It needs validation on a physical Deck and a reachable Jellyfin server before a release.
+This is an early working foundation. Automated usability checks run against a real Jellyfin server at 1080p, 1440p, and 4K. Physical Steam Deck validation is still needed before a release.
 
 ## Build and run
 
@@ -34,7 +34,7 @@ Installation is optional: `cmake --install build --prefix ~/.local` installs the
 
 | Controller | Keyboard | Action |
 | --- | --- | --- |
-| D-pad / left stick | Arrow keys | Move focus; seek ±10 seconds during playback |
+| D-pad / left stick | Arrow keys | Move focus; seek ±10 seconds from the video, or preview a seek on the timeline |
 | A | Enter / F2 | Select; A or F2 opens Steam keyboard in a field; pause in the player |
 | B | Escape | Back; close a dialog; hide player controls, then stop; prompt to exit on Home |
 | X | Space | Pause in the player |
@@ -45,9 +45,11 @@ Installation is optional: `cmake --install build --prefix ~/.local` installs the
 
 Titles open on a full-screen detail page with backdrop artwork. Each season appears as an episode row below the series details; the Episodes button jumps to these rows. Selecting an episode opens its details, and B returns to the same season and episode selection. An episode's Season link jumps to that row on the series page. The Jellyfin profile image in the top-right corner opens Settings; an initial appears when no image is available.
 
-Theme songs supplied by the server play on detail pages, including inherited series themes for episodes. Adjust **Settings → Theme volume** from 0–100% with Left/Right or the slider; the saved level applies immediately and defaults to 70%. They stop when leaving the page or starting video and do not create video playback sessions. Disable them in **Settings → Theme songs**. Missing themes are ignored.
+Theme songs supplied by the server play on detail pages, including inherited series themes for episodes. Adjust **Settings → Theme volume** from 0–100% with Left/Right or the slider; the saved level applies immediately and defaults to 70%. The same theme continues while moving between a series, its seasons, and its episodes. Themes stop when leaving title details or starting video and do not create video playback sessions. Disable them in **Settings → Theme songs**. Missing themes are ignored.
 
-Press Down in the player to reach pause, playback settings, and stop. Playback settings groups quality, audio, subtitles, and media info. Title details also has an expandable playback settings row for choosing options before playing; cast and chapters expand separately. Up or B hides the player controls; B again stops playback. After ten seconds paused without input, the video dims and shows the title and episode. The controller can be disconnected and reconnected without restarting.
+Press Down in the player to select the playhead. Move the left stick to preview a seek: a small deflection moves slowly, a full deflection moves faster, and holding it accelerates. Press A / Enter to commit or B / Escape to cancel. Trickplay thumbnails appear when supplied by the server. Pointer dragging seeks on release. Press Down again to reach pause, playback settings, and stop. Playback settings groups quality, audio, subtitles, and media info. Title details also has an expandable playback settings row for choosing options before playing; cast and chapters expand separately. Up from the timeline, or B outside a seek preview, hides the player controls; B again stops playback. After ten seconds paused without input, the video dims and shows the title and episode. The controller can be disconnected and reconnected without restarting.
+
+The interface scales automatically for the display resolution. **Settings → UI scale** adjusts the entire interface from 75–150% in 5% steps with Left/Right. This includes text, controls, dialogs, and artwork; settings remain scrollable at larger scales. Automatic audio and subtitle choices name the track being used. Shelf, season, detail, and artwork placeholders show skeletons while data loads, and remembered sessions show a loading screen until authentication completes.
 
 ## Implemented
 
@@ -65,7 +67,7 @@ Press Down in the player to reach pause, playback settings, and stop. Playback s
 - Media details for the source container, bitrate, size, codecs, resolution, and tracks.
 - Intro, credits, recap, preview, and commercial skip buttons from Jellyfin’s Media Segment API when the server supplies segments.
 - Playback start/progress/stop reporting and cleanup of server transcoding jobs.
-- Automatic / direct-only / forced-transcoding modes, bitrate limits, hardware decoding, fullscreen, poster size, and accent colors.
+- Automatic / direct-only / forced-transcoding modes, bitrate limits, hardware decoding, fullscreen, UI scale, and accent colors.
 
 Direct play is preferred across the media versions Jellyfin returns. Direct-only mode shows an error if none is playable. Automatic mode permits server transcoding; forced-transcoding mode disables video/audio stream copying. Transcoded seeking requests a fresh stream at the target position so playback progress remains on the source timeline. Global playback settings apply to the next stream. Player quality and track selections apply immediately. Automatic uses the global playback mode and bitrate limit, Original requires direct play, and a specific bitrate requests transcoding.
 
@@ -93,6 +95,17 @@ export JF_USERNAME JF_PASSWORD
 ./build/jf-live-check
 unset JF_SERVER JF_USERNAME JF_PASSWORD
 ```
+
+The opt-in native usability runner signs in through the UI, browses the real libraries, filters/sorts/paginates, navigates series and episodes, checks favorite round-trips, decodes direct and transcoded video, changes subtitles, previews stick/pointer seeks with trickplay, and checks scale settings and screenshots. It uses isolated settings and signs out afterward. Playback reporting updates the disposable account's watch progress. Set `JF_SCREENSHOT_DIR` to save full-resolution screenshots; `JF_THEME_TEST_TITLE` optionally selects a known series with a theme for a continuity assertion.
+
+```sh
+# Uses JF_SERVER, JF_USERNAME and JF_PASSWORD from the environment.
+JF_TEST_HEIGHT=1080 ./build/jf-live-ui-tests
+JF_TEST_HEIGHT=1440 ./build/jf-live-ui-tests
+JF_TEST_HEIGHT=2160 ./build/jf-live-ui-tests
+```
+
+The runner configures Qt's virtual screen and window to the selected 16:9 resolution at DPR 1; it does not resize a low-resolution screenshot. UI rendering uses Qt's software backend and video decoding uses libmpv's software render API. Physical gamepad/Steam overlay, audio output, and native GPU presentation remain hardware checks. See [the usability report](docs/usability-2026-10-17.md).
 
 For a headless screenshot of the sign-in screen:
 
