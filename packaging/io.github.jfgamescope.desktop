@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=JF Gamescope
+Comment=Controller-first Jellyfin client
+Exec=jf-gamescope --fullscreen
+Icon=io.github.jfgamescope
+Terminal=false
+Categories=AudioVideo;Video;Player;
+Keywords=Jellyfin;Steam;Deck;gamescope;

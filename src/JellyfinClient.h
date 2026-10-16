@@ -9,7 +9,7 @@ class JellyfinClient : public QObject {
     Q_OBJECT
 public:
     using Callback = std::function<void(const QJsonObject &, const QString &)>;
-    explicit JellyfinClient(QString deviceId, QObject *parent = nullptr);
+    explicit JellyfinClient(QString deviceId, QObject *parent = nullptr, QNetworkAccessManager *transport = nullptr);
     void configure(const QUrl &server, const QString &token = {});
     QUrl server() const { return m_server; }
     QString token() const { return m_token; }
@@ -23,7 +23,7 @@ signals:
     void unauthorized();
 private:
     void send(const QByteArray &method, const QString &path, const QUrlQuery &query, const QJsonObject &body, Callback callback);
-    QNetworkAccessManager m_network;
+    QNetworkAccessManager *m_network;
     QUrl m_server;
     QString m_token, m_deviceId;
     int m_generation = 0;
