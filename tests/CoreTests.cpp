@@ -16,6 +16,10 @@ private slots:
         QVERIFY(Playback::sameOrigin(QUrl("https://example.com/a"), QUrl("https://example.com:443/b")));
         QVERIFY(!Playback::sameOrigin(QUrl("https://evil.example/a"), QUrl("https://example.com/b")));
         QVERIFY(!Playback::sameOrigin(QUrl("http://example.com/a"), QUrl("https://example.com/b")));
+        const QUrl server("https://example.com/jellyfin/");
+        for (const auto &path : {"Videos/item/master.m3u8?x=1", "/Videos/item/master.m3u8?x=1", "/jellyfin/Videos/item/master.m3u8?x=1"}) {
+            QCOMPARE(Playback::resourceUrl(server, QUrl(path)).toString(), "https://example.com/jellyfin/Videos/item/master.m3u8?x=1");
+        }
     }
     void playbackPolicy() {
         auto direct = Playback::request("user", "direct", 8000000, 1200000000);

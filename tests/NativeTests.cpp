@@ -170,6 +170,17 @@ private slots:
             return r.operation == QNetworkAccessManager::DeleteOperation && r.request.url().path().endsWith("ActiveEncodings");
         }));
     }
+    void playbackEventsKeepOptionsFocused() {
+        QVERIFY(signIn());
+        const auto item = m_app->shelves().first().toMap()["items"].toList().first().toMap();
+        m_app->play(item); QTRY_VERIFY(m_player->active());
+        QTest::keyClick(m_window, Qt::Key_F1);
+        QTRY_VERIFY(object("optionsPopup")->property("visible").toBool());
+        QTRY_VERIFY(object("modeSetting")->property("activeFocus").toBool());
+        m_player->togglePause(); QTRY_VERIFY(m_player->paused());
+        QVERIFY(object("modeSetting")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Escape); m_app->stopPlayback();
+    }
     void embeddedMpvDecodesPausesAndResumes() {
         m_engine.reset();
         const auto ffmpeg = QStandardPaths::findExecutable("ffmpeg");

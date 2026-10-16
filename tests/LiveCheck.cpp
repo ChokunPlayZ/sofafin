@@ -20,7 +20,19 @@ int main(int argc, char **argv) {
     QString token, user, itemId;
     Playback::Plan plan;
     int stage = 0;
-    auto fail = [&](const QString &message) { std::fprintf(stderr, "FAIL: %s\n", qPrintable(message)); decoder.kill(); app.exit(1); };
+    bool terminating = false;
+    auto fail = [&](const QString &message) {
+        if (terminating) return;
+        terminating = true; deadline.stop(); decoder.kill();
+        std::fprintf(stderr, "FAIL: %s\n", qPrintable(message));
+        if (token.isEmpty()) { app.exit(1); return; }
+        const auto logout = [&] { api.post("Sessions/Logout", {}, [&](const auto &, const auto &) { app.exit(1); }); };
+        QTimer::singleShot(2000, &app, [&] { app.exit(1); });
+        if (plan.method == "Transcode" && !plan.sessionId.isEmpty()) {
+            QUrlQuery q; q.addQueryItem("DeviceId", api.deviceId()); q.addQueryItem("PlaySessionId", plan.sessionId);
+            api.remove("Videos/ActiveEncodings", q, [logout](const auto &, const auto &) { logout(); });
+        } else logout();
+    };
     QObject::connect(&deadline, &QTimer::timeout, &app, [&] { fail("Timed out preparing or decoding the stream."); });
     std::function<void()> check;
     check = [&] {
@@ -37,8 +49,9 @@ int main(int argc, char **argv) {
     QObject::connect(&decoder, &QProcess::errorOccurred, &app, [&](QProcess::ProcessError) { fail("Could not start the mpv decoder."); });
     QObject::connect(&decoder, &QProcess::finished, &app, [&](int exitCode, QProcess::ExitStatus status) {
         decoder.readAllStandardOutput(); decoder.readAllStandardError();
+        if (terminating) return;
         if (status != QProcess::NormalExit || exitCode != 0) { fail("mpv could not decode the negotiated stream."); return; }
-        std::printf("PASS: %s negotiated and decoded 30 video frames\n", stage == 0 ? "direct play" : "forced transcoding");
+        std::printf("PASS: %s negotiated and decoded a video sample\n", stage == 0 ? "direct play" : "forced transcoding");
         if (stage++ == 0) check();
         else {
             QUrlQuery q; q.addQueryItem("DeviceId", api.deviceId()); q.addQueryItem("PlaySessionId", plan.sessionId);
