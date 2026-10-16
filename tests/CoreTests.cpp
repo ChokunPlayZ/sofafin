@@ -1,5 +1,6 @@
 #include "Playback.h"
 #include "JellyfinClient.h"
+#include "FakeNetwork.h"
 #include <QtTest>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -56,7 +57,46 @@ private slots:
         QJsonObject response{{"MediaSources", QJsonArray{QJsonObject{{"SupportsDirectPlay", true}, {"RequiresOpening", true}}}}};
         QVERIFY(!Playback::negotiate(response, QUrl("https://example.com"), "item", "device", "token", "auto", 0).valid());
     }
+    void authenticatedPostAndResponseParsing() {
+        FakeNetwork transport;
+        transport.respond = [](const auto &) { return FixtureResponse{R"({"PlaySessionId":"session","MediaSources":[]})"}; };
+        JellyfinClient api("device", nullptr, &transport); api.configure(QUrl("https://example.com/base"), "token");
+        bool completed = false;
+        api.post("Items/item/PlaybackInfo", Playback::request("user", "auto", 8000000, 0), [&](const auto &result, const auto &error) {
+            QVERIFY(error.isEmpty()); QCOMPARE(result["PlaySessionId"].toString(), "session"); completed = true;
+        });
+        QTRY_VERIFY(completed);
+        QCOMPARE(transport.requests.size(), 1);
+        const auto request = transport.requests.first();
+        QCOMPARE(request.operation, QNetworkAccessManager::PostOperation);
+        QCOMPARE(request.request.url().path(), "/base/Items/item/PlaybackInfo");
+        QVERIFY(request.request.rawHeader("Authorization").contains("Token=\"token\""));
+        QCOMPARE(request.request.attribute(QNetworkRequest::RedirectPolicyAttribute).toInt(), int(QNetworkRequest::SameOriginRedirectPolicy));
+        QVERIFY(QJsonDocument::fromJson(request.body).object()["EnableTranscoding"].toBool());
+    }
+    void rejectsMalformedJsonAndExpiresSession() {
+        FakeNetwork transport;
+        transport.respond = [](const auto &) { return FixtureResponse{"not json"}; };
+        JellyfinClient api("device", nullptr, &transport); api.configure(QUrl("https://example.com"), "token");
+        QString error;
+        api.get("Users/Me", {}, [&](const auto &, const auto &e) { error = e; });
+        QTRY_VERIFY(error.contains("invalid response"));
+        transport.respond = [](const auto &) { return FixtureResponse{"{}", 401}; };
+        QSignalSpy expired(&api, &JellyfinClient::unauthorized);
+        api.get("Users/Me", {}, {});
+        QTRY_COMPARE(expired.size(), 1);
+    }
+    void discardsResponsesFromOldSession() {
+        FakeNetwork transport;
+        JellyfinClient api("device", nullptr, &transport); api.configure(QUrl("https://example.com"), "old");
+        bool called = false;
+        api.get("Users/Me", {}, [&](const auto &, const auto &) { called = true; });
+        api.configure(QUrl("https://example.com"), "new");
+        QTest::qWait(20); QVERIFY(!called);
+    }
     void realHttpTransport() {
+        if (qEnvironmentVariableIsSet("CODEX_SANDBOX_NETWORK_DISABLED"))
+            QSKIP("This sandbox forbids network sockets, including loopback.");
         QNetworkProxy::setApplicationProxy(QNetworkProxy::NoProxy);
         QTcpServer server;
         if (!server.listen(QHostAddress::LocalHost) && server.serverError() == QAbstractSocket::SocketAccessError)

@@ -110,8 +110,10 @@ void AppController::home(const QString &category) {
     const auto done = [this, generation](int index, const QJsonObject &result, const QString &error) {
         if (generation != m_generation) return;
         if (index == -1) { m_libraries = items(result); emit librariesChanged(); }
-        else { auto shelf = m_shelves[index].toMap(); shelf["items"] = items(result); m_shelves[index] = shelf; emit shelvesChanged(); }
-        --m_pending; if (!error.isEmpty()) m_message = error; emit changed(); if (m_pending == 0) emit browsingReady();
+        else { auto shelf = m_shelves[index].toMap(); shelf["items"] = items(result); m_shelves[index] = shelf; }
+        --m_pending; if (!error.isEmpty()) m_message = error;
+        if (m_pending == 0) emit shelvesChanged();
+        emit changed(); if (m_pending == 0) emit browsingReady();
     };
     emit changed();
     m_api.get("Users/" + m_userId + "/Views", {}, [done](const auto &r, const auto &e) { done(-1, r, e); });

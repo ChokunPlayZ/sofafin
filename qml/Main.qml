@@ -13,6 +13,7 @@ ApplicationWindow {
     readonly property color accent: Preferences.accent
     property var selectedMedia: ({})
     property var detailMedia: ({})
+    property var selectedIndices: ({})
     property int activeTab: 0
     property bool controlsVisible: true
     property bool closingAfterStop: false
@@ -121,6 +122,7 @@ ApplicationWindow {
                 Text { text: "SERVER ADDRESS"; color: "#91aabe"; font.pixelSize: 11; font.letterSpacing: 1.5 }
                 TextField {
                     id: serverField
+                    objectName: "serverField"
                     Layout.fillWidth: true; implicitHeight: 49
                     text: App.savedServer; placeholderText: "http://192.168.1.10:8096"; color: "white"; placeholderTextColor: "#617e94"; font.pixelSize: 16; padding: 14
                     selectByMouse: true; activeFocusOnTab: true; inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoAutoUppercase
@@ -132,6 +134,7 @@ ApplicationWindow {
                 Text { text: "USERNAME"; color: "#91aabe"; font.pixelSize: 11; font.letterSpacing: 1.5 }
                 TextField {
                     id: usernameField
+                    objectName: "usernameField"
                     Layout.fillWidth: true; implicitHeight: 49; text: App.savedUsername; placeholderText: "Your Jellyfin username"; color: "white"; placeholderTextColor: "#617e94"; font.pixelSize: 16; padding: 14; selectByMouse: true; activeFocusOnTab: true
                     background: Rectangle { color: "#0d1b28"; radius: 5; border.width: usernameField.activeFocus ? 2 : 1; border.color: usernameField.activeFocus ? window.accent : "#2a4255" }
                     Keys.onReturnPressed: keyboard.edit(usernameField)
@@ -140,12 +143,13 @@ ApplicationWindow {
                 Text { text: "PASSWORD"; color: "#91aabe"; font.pixelSize: 11; font.letterSpacing: 1.5 }
                 TextField {
                     id: passwordField
+                    objectName: "passwordField"
                     Layout.fillWidth: true; implicitHeight: 49; echoMode: TextInput.Password; placeholderText: "Your password"; color: "white"; placeholderTextColor: "#617e94"; font.pixelSize: 16; padding: 14; activeFocusOnTab: true
                     background: Rectangle { color: "#0d1b28"; radius: 5; border.width: passwordField.activeFocus ? 2 : 1; border.color: passwordField.activeFocus ? window.accent : "#2a4255" }
                     Keys.onReturnPressed: keyboard.edit(passwordField)
                     KeyNavigation.up: usernameField; KeyNavigation.down: rememberButton
                 }
-                NavButton { id: rememberButton; Layout.fillWidth: true; text: (checked ? "✓" : "○") + "  Keep me signed in"; checkable: true; upTarget: passwordField; downTarget: signIn; implicitHeight: 38; font.pixelSize: 13 }
+                NavButton { id: rememberButton; objectName: "rememberButton"; Layout.fillWidth: true; text: (checked ? "✓" : "○") + "  Keep me signed in"; checkable: true; upTarget: passwordField; downTarget: signIn; implicitHeight: 38; font.pixelSize: 13 }
                 NavButton { id: signIn; text: App.busy ? "Connecting…" : "Connect to Jellyfin  →"; primary: true; accent: window.accent; Layout.fillWidth: true; implicitHeight: 52; upTarget: rememberButton; downTarget: optionsButton; enabled: !App.busy; onClicked: { App.login(serverField.text, usernameField.text, passwordField.text, rememberButton.checked); passwordField.clear() } }
                 NavButton { id: optionsButton; text: "Options"; Layout.fillWidth: true; implicitHeight: 38; font.pixelSize: 13; upTarget: signIn; downTarget: serverField; onClicked: { options.open(); modeSetting.forceActiveFocus() } }
             }
@@ -165,13 +169,13 @@ ApplicationWindow {
                 spacing: 12
                 Image { source: "qrc:/assets/logo.svg"; Layout.preferredWidth: 37; Layout.preferredHeight: 37 }
                 Text { text: "GAMESCOPE"; color: "#e9f2f9"; font.pixelSize: 16; font.weight: Font.Bold; font.letterSpacing: 2; Layout.rightMargin: 24 }
-                NavButton { id: homeButton; text: "Home"; implicitWidth: 95; implicitHeight: 40; primary: window.activeTab === 0; accent: window.accent; downTarget: shelves.count ? shelves.itemAt(0) : null; onClicked: { window.activeTab = 0; App.home() } }
+                NavButton { id: homeButton; objectName: "homeButton"; text: "Home"; implicitWidth: 95; implicitHeight: 40; primary: window.activeTab === 0; accent: window.accent; Keys.onDownPressed: window.focusContent(); onClicked: { window.activeTab = 0; App.home() } }
                 NavButton { text: "Movies"; implicitWidth: 95; implicitHeight: 40; primary: window.activeTab === 1; accent: window.accent; onClicked: { window.activeTab = 1; App.home("Movies") } }
                 NavButton { text: "Shows"; implicitWidth: 95; implicitHeight: 40; primary: window.activeTab === 2; accent: window.accent; onClicked: { window.activeTab = 2; App.home("Shows") } }
                 Item { Layout.fillWidth: true }
                 Text { text: App.username; color: "#93aec1"; font.pixelSize: 13; Layout.maximumWidth: 110; elide: Text.ElideRight }
                 NavButton { text: "Search"; implicitWidth: 90; implicitHeight: 40; onClicked: { searchPopup.open(); searchField.forceActiveFocus() } }
-                NavButton { text: "Options"; implicitWidth: 90; implicitHeight: 40; onClicked: { options.open(); modeSetting.forceActiveFocus() } }
+                NavButton { text: "Options"; implicitWidth: 100; implicitHeight: 40; onClicked: { options.open(); modeSetting.forceActiveFocus() } }
             }
             Column {
                 x: 42; y: 116; spacing: 10; width: parent.width - 84
@@ -203,10 +207,12 @@ ApplicationWindow {
                         MediaShelf {
                             required property var modelData
                             required property int index
+                            objectName: "shelf-" + index
                             width: shelfColumn.width
                             title: modelData.title; items: modelData.items; accent: window.accent
+                            initialIndex: window.selectedIndices[modelData.title] || 0
                             cardWidth: 156 * Preferences.uiScale; cardHeight: 226 * Preferences.uiScale
-                            onSelected: media => window.selectedMedia = media
+                            onSelected: media => { window.selectedMedia = media; window.selectedIndices[title] = itemIndex }
                             onActivated: media => window.activate(media)
                             onMoveUp: window.focusShelf(index, -1)
                             onMoveDown: window.focusShelf(index, 1)
@@ -313,13 +319,14 @@ ApplicationWindow {
     }
     Popup {
         id: options
+        objectName: "optionsPopup"
         parent: Overlay.overlay; width: Math.min(690, window.width - 50); height: Math.min(660, window.height - 50); x: (window.width - width) / 2; y: (window.height - height) / 2; modal: true; focus: true; padding: 30
         background: Rectangle { color: "#152a3c"; radius: 8; border.color: "#36536a" }
         contentItem: ColumnLayout {
             spacing: 10
             Text { text: "Make it yours"; color: "white"; font.pixelSize: 29; font.weight: Font.Bold }
             Text { text: "PLAYBACK & DISPLAY"; color: "#89a8be"; font.pixelSize: 11; font.letterSpacing: 2; bottomPadding: 8 }
-            NavButton { id: modeSetting; Layout.fillWidth: true; text: "Playback  ·  " + ({auto: "Automatic", direct: "Direct play only", transcode: "Always transcode"})[Preferences.playbackMode]; onClicked: { let modes = ["auto", "direct", "transcode"]; Preferences.playbackMode = modes[(modes.indexOf(Preferences.playbackMode) + 1) % 3] } }
+            NavButton { id: modeSetting; objectName: "modeSetting"; Layout.fillWidth: true; text: "Playback  ·  " + ({auto: "Automatic", direct: "Direct play only", transcode: "Always transcode"})[Preferences.playbackMode]; onClicked: { let modes = ["auto", "direct", "transcode"]; Preferences.playbackMode = modes[(modes.indexOf(Preferences.playbackMode) + 1) % 3] } }
             NavButton { Layout.fillWidth: true; text: "Streaming limit  ·  " + Preferences.bitrate / 1000000 + " Mbps"; onClicked: { let rates = [4000000, 8000000, 20000000, 40000000, 80000000, 120000000]; Preferences.bitrate = rates[(rates.indexOf(Preferences.bitrate) + 1) % rates.length] } }
             NavButton { Layout.fillWidth: true; text: "Hardware decoding  ·  " + (Preferences.hardwareDecoding ? "Automatic" : "Off"); onClicked: Preferences.hardwareDecoding = !Preferences.hardwareDecoding }
             NavButton { Layout.fillWidth: true; text: "Fullscreen  ·  " + (Preferences.fullscreen ? "On" : "Off"); onClicked: { Preferences.fullscreen = !Preferences.fullscreen; window.visibility = Preferences.fullscreen ? Window.FullScreen : Window.Windowed } }

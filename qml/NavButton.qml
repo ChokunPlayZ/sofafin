@@ -31,8 +31,8 @@ Button {
         border.width: 3
         Behavior on color { ColorAnimation { duration: 110 } }
     }
-    Keys.onReturnPressed: clicked()
-    Keys.onEnterPressed: clicked()
+    Keys.onReturnPressed: { if (checkable) checked = !checked; clicked() }
+    Keys.onEnterPressed: { if (checkable) checked = !checked; clicked() }
     Keys.onPressed: event => {
         let target = null
         if (event.key === Qt.Key_Up) target = upTarget || nextItemInFocusChain(false)
