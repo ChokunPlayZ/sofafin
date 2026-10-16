@@ -10,7 +10,8 @@ NavButton {
     property string displayText: currentText
     readonly property alias popup: chooser
     signal activated(int index)
-    text: displayText + "  ▾"
+    text: displayText
+    value: "▾"
     onClicked: chooser.open()
     Popup {
         id: chooser

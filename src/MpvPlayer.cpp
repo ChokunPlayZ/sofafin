@@ -3,13 +3,20 @@
 #include <stdexcept>
 #include <vector>
 
-MpvPlayer::MpvPlayer(QObject *parent) : QObject(parent), m_core(std::make_shared<MpvCore>()) {
+MpvPlayer::MpvPlayer(QObject *parent, bool audioOnly) : QObject(parent), m_core(std::make_shared<MpvCore>()) {
     auto *h = m_core->handle = mpv_create();
     if (!h) throw std::runtime_error("Could not create libmpv.");
     for (const auto &[key, value] : {std::pair{"vo", "libmpv"}, {"terminal", "no"}, {"config", "no"},
          {"input-default-bindings", "no"}, {"input-vo-keyboard", "no"}, {"osc", "no"},
          {"idle", "yes"}, {"keep-open", "no"}, {"hwdec", "no"}, {"audio-channels", "stereo"}})
         mpv_set_option_string(h, key, value);
+    if (audioOnly) {
+        mpv_set_option_string(h, "vo", "null");
+        mpv_set_option_string(h, "vid", "no");
+        mpv_set_option_string(h, "volume", "35");
+        mpv_set_option_string(h, "loop-file", "inf");
+        m_ready = true;
+    }
     if (mpv_initialize(h) < 0) throw std::runtime_error("Could not initialize libmpv.");
     mpv_observe_property(h, 0, "time-pos", MPV_FORMAT_DOUBLE);
     mpv_observe_property(h, 0, "duration", MPV_FORMAT_DOUBLE);

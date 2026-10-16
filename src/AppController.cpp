@@ -16,7 +16,15 @@ QUrlQuery query(std::initializer_list<std::pair<QString, QString>> values) {
 }
 }
 AppController::AppController(Settings *settings, MpvPlayer *player, QObject *parent, QNetworkAccessManager *transport)
-    : QObject(parent), m_settings(settings), m_player(player), m_api(settings->value("deviceId").toString(), this, transport) {
+    : QObject(parent), m_settings(settings), m_player(player), m_themePlayer(new MpvPlayer(this, true)), m_api(settings->value("deviceId").toString(), this, transport) {
+    m_themePlayer->setObjectName("themePlayer");
+    m_themeEnabled = settings->themeSongs();
+    connect(settings, &Settings::changed, this, [this] {
+        if (m_themeEnabled == m_settings->themeSongs()) return;
+        m_themeEnabled = m_settings->themeSongs();
+        stopThemeSong();
+        if (m_themeEnabled && !m_detailLoading) fetchThemeSong();
+    });
     connect(&m_api, &JellyfinClient::unauthorized, this, [this] { logout(); notify("Your session expired. Sign in again."); });
     connect(player, &MpvPlayer::error, this, [this](const QString &error) { finishSession(); setError(error); });
     connect(player, &MpvPlayer::ended, this, [this] { finishSession(); if (signedIn()) home(); });
@@ -58,7 +66,8 @@ void AppController::start() {
     m_api.get("Users/Me", {}, [this, userId](const QJsonObject &user, const QString &error) {
         m_pending = 0;
         if (!error.isEmpty()) { setError(error); return; }
-        m_userId = user.value("Id").toString(userId); m_username = user.value("Name").toString(savedUsername()); home();
+        m_userId = user.value("Id").toString(userId); m_username = user.value("Name").toString(savedUsername());
+        m_profileImage = m_api.userImageUrl(m_userId, user.value("PrimaryImageTag").toString()); home();
     });
 }
 void AppController::login(const QString &server, const QString &username, const QString &password, bool remember) {
@@ -76,6 +85,7 @@ void AppController::login(const QString &server, const QString &username, const 
         const auto user = result.value("User").toObject(); const auto token = result.value("AccessToken").toString();
         if (token.isEmpty() || user.value("Id").toString().isEmpty()) { setError("The server did not return a valid session."); return; }
         m_api.configure(url, token); m_userId = user.value("Id").toString(); m_username = user.value("Name").toString();
+        m_profileImage = m_api.userImageUrl(m_userId, user.value("PrimaryImageTag").toString());
         m_settings->put("server", url.toString()); m_settings->put("username", m_username);
         m_settings->clearSession();
         if (remember) { m_settings->put("accessToken", token); m_settings->put("userId", m_userId); }
@@ -85,7 +95,7 @@ void AppController::login(const QString &server, const QString &username, const 
 void AppController::logout() {
     stopPlayback();
     m_api.post("Sessions/Logout", {});
-    closeDetails(); m_updatingUserData = false; ++m_generation; m_pending = 0; m_userId.clear(); m_username.clear(); m_shelves.clear(); m_libraries.clear(); m_history.clear();
+    closeDetails(); m_updatingUserData = false; ++m_generation; m_pending = 0; m_userId.clear(); m_username.clear(); m_profileImage.clear(); m_shelves.clear(); m_libraries.clear(); m_history.clear();
     m_settings->clearSession(); m_api.configure({}); emit shelvesChanged(); emit librariesChanged(); emit changed();
 }
 void AppController::setError(const QString &error) { m_message = error; emit changed(); }
@@ -170,6 +180,7 @@ QVariantList AppController::items(const QJsonObject &response) const {
 }
 void AppController::home(const QString &category) {
     if (!signedIn()) return;
+    stopThemeSong();
     ++m_generation; m_history.clear(); m_pageParent.clear(); m_pageSearch.clear(); m_pageCategory = category; m_pageType.clear(); m_pageSeries.clear(); m_filter = "All"; m_sort = "Name";
     m_title = category; m_loaded = m_total = 0; m_shelves.clear(); m_message.clear();
     if (category != "Home") { fetchPage(); return; }
@@ -209,6 +220,7 @@ void AppController::home(const QString &category) {
 }
 void AppController::open(const QVariantMap &item) {
     if (!item.value("folder").toBool()) return;
+    stopThemeSong();
     m_history.append({{"title", m_title}, {"parent", m_pageParent}, {"search", m_pageSearch}, {"category", m_pageCategory}, {"type", m_pageType}, {"series", m_pageSeries}, {"filter", m_filter}, {"sort", m_sort}});
     ++m_generation; m_title = item.value("title").toString(); m_pageParent = item.value("id").toString();
     m_pageSearch.clear(); m_pageCategory.clear(); m_pageType = item.value("type").toString(); m_pageSeries = item.value("seriesId").toString();
@@ -232,6 +244,7 @@ void AppController::back() {
 }
 void AppController::search(const QString &text) {
     if (text.trimmed().isEmpty() || !signedIn()) return;
+    stopThemeSong();
     ++m_generation; m_history.clear(); m_pageParent.clear(); m_pageCategory.clear(); m_pageSearch = text.trimmed();
     m_pageType.clear(); m_pageSeries.clear(); m_filter = "All"; m_sort = "Name";
     m_title = "Results for “" + m_pageSearch + "”"; m_loaded = m_total = 0; fetchPage();
@@ -239,6 +252,7 @@ void AppController::search(const QString &text) {
 void AppController::loadMore() { if (!busy() && hasMore()) fetchPage(true); }
 void AppController::showDetails(const QVariantMap &item) {
     if (!signedIn() || item.value("id").toString().isEmpty()) return;
+    stopThemeSong();
     const int generation = ++m_detailGeneration;
     m_detail = item; m_detailLoading = true; emit detailsChanged();
     m_api.get("Users/" + m_userId + "/Items/" + item.value("id").toString(),
@@ -251,6 +265,7 @@ void AppController::showDetails(const QVariantMap &item) {
             emit detailsChanged(); setError("The server did not return the requested title."); return;
         }
         m_detail = normalize(result); emit detailsChanged();
+        fetchThemeSong();
         if (m_detail.value("type") == "Episode" && !m_detail.value("seriesId").toString().isEmpty()) {
             m_api.get("Shows/" + m_detail.value("seriesId").toString() + "/Episodes",
                 query({{"UserId", m_userId}, {"StartItemId", m_detail.value("id").toString()}, {"Limit", "2"}, {"Fields", fields}, {"IsMissing", "false"}}),
@@ -264,7 +279,30 @@ void AppController::showDetails(const QVariantMap &item) {
     });
 }
 void AppController::closeDetails() {
+    stopThemeSong();
     ++m_detailGeneration; m_detailLoading = false; m_detail.clear(); emit detailsChanged();
+}
+void AppController::stopThemeSong() {
+    ++m_themeGeneration;
+    m_themePlayer->stop();
+}
+void AppController::fetchThemeSong() {
+    const auto id = m_detail.value("id").toString();
+    if (!signedIn() || id.isEmpty() || !m_settings->themeSongs() || m_player->active() || m_negotiating) return;
+    const int generation = ++m_themeGeneration;
+    m_api.get("Items/" + QString::fromLatin1(QUrl::toPercentEncoding(id)) + "/ThemeSongs",
+        query({{"UserId", m_userId}, {"InheritFromParent", "true"}}),
+        [this, generation](const QJsonObject &result, const QString &error) {
+        if (generation != m_themeGeneration || !error.isEmpty() || !m_settings->themeSongs() || m_player->active() || m_negotiating) return;
+        // Theme media is optional; missing or unplayable themes must not interrupt browsing.
+        const auto songs = result.value("Items").toArray();
+        if (songs.isEmpty()) return;
+        const auto songId = songs.first().toObject().value("Id").toString();
+        if (songId.isEmpty()) return;
+        auto url = Playback::endpoint(m_api.server(), "Audio/" + QString::fromLatin1(QUrl::toPercentEncoding(songId)) + "/stream");
+        url.setQuery(query({{"static", "true"}, {"api_key", m_api.token()}}));
+        m_themePlayer->load(url, 0, 0, 0, false);
+    });
 }
 void AppController::openSeries(const QVariantMap &item) {
     const auto id = item.value("seriesId").toString();
@@ -378,6 +416,7 @@ void AppController::fetchSegments() {
     });
 }
 void AppController::beginPlay(const QVariantMap &item, qint64 startTicks, bool paused) {
+    stopThemeSong();
     m_negotiating = true; emit changed();
     finishSession(); m_player->stop(); m_currentItem = item; m_resumePaused = paused;
     const int generation = ++m_playGeneration;

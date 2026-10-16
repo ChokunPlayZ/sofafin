@@ -21,7 +21,7 @@ class MpvPlayer : public QObject {
     Q_PROPERTY(QString audioTrack READ audioTrack NOTIFY changed)
     Q_PROPERTY(QString subtitleTrack READ subtitleTrack NOTIFY changed)
 public:
-    explicit MpvPlayer(QObject *parent = nullptr);
+    explicit MpvPlayer(QObject *parent = nullptr, bool audioOnly = false);
     ~MpvPlayer() override;
     std::shared_ptr<MpvCore> core() const { return m_core; }
     bool active() const { return m_active; }

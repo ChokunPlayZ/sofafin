@@ -15,6 +15,10 @@
 #include <QProcess>
 #include <QStandardPaths>
 #include <QJsonArray>
+#include <QBuffer>
+#include <QDataStream>
+#include <QTcpServer>
+#include <QTcpSocket>
 #include <mpv/render.h>
 
 class NativeTests : public QObject {
@@ -103,6 +107,8 @@ private slots:
     void captureKeyboardUrl(const QUrl &url) { m_keyboardUrl = url; }
     void steamKeyboardAndSignInFocus() {
         auto *server = qobject_cast<QQuickItem *>(object("serverField")); QVERIFY(server); server->forceActiveFocus();
+        const auto preview = qEnvironmentVariable("JF_LOGIN_SCREENSHOT");
+        if (!preview.isEmpty()) QVERIFY(m_window->grabWindow().save(preview));
         QTest::keyClick(m_window, Qt::Key_F2);
         QTRY_COMPARE(m_keyboardUrl.scheme(), "steam");
         QCOMPARE(m_keyboardUrl.host(), "open"); QCOMPARE(m_keyboardUrl.path(), "/keyboard");
@@ -125,12 +131,20 @@ private slots:
         QCOMPARE(object("rememberButton")->property("checked").toBool(), !before);
     }
     void settingsWithDpad() {
+        m_window->resize(800, 500);
         QTest::keyClick(m_window, Qt::Key_F1);
         QTRY_VERIFY(object("optionsPopup")->property("visible").toBool());
         QTRY_VERIFY(object("modeSetting")->property("activeFocus").toBool());
         QTest::keyClick(m_window, Qt::Key_Return); QCOMPARE(m_settings->playbackMode(), "direct");
         QTest::keyClick(m_window, Qt::Key_Down); QTest::keyClick(m_window, Qt::Key_Return);
         QCOMPARE(m_settings->bitrate(), 4000000);
+        for (int i = 0; i < 5; ++i) QTest::keyClick(m_window, Qt::Key_Down);
+        auto *accent = qobject_cast<QQuickItem *>(object("accentSetting")); QVERIFY(accent);
+        QTRY_VERIFY(accent->hasActiveFocus());
+        auto *scroll = qobject_cast<QQuickItem *>(object("settingsScroll")); QVERIFY(scroll);
+        QTRY_VERIFY(QRectF(0, 0, scroll->width(), scroll->height()).contains(accent->mapRectToItem(scroll, accent->boundingRect())));
+        const auto preview = qEnvironmentVariable("JF_SETTINGS_SCREENSHOT");
+        if (!preview.isEmpty()) QVERIFY(m_window->grabWindow().save(preview));
         QTest::keyClick(m_window, Qt::Key_Escape);
         QTRY_VERIFY(!object("optionsPopup")->property("visible").toBool());
     }
@@ -176,6 +190,141 @@ private slots:
         QTRY_VERIFY(object("shelf-1")->property("activeFocus").toBool());
         QTest::keyClick(m_window, Qt::Key_Up);
         QTRY_VERIFY(object("shelf-0")->property("activeFocus").toBool());
+    }
+    void fullScreenSeriesAndEpisodeNavigation() {
+        const auto original = m_network->respond;
+        const QJsonObject series{{"Id", "series"}, {"Name", "A series"}, {"Type", "Series"}, {"IsFolder", true},
+            {"Overview", "A crew crosses an unfamiliar ocean in search of a place to call home."}};
+        const QJsonObject season{{"Id", "season"}, {"Name", "Season 1"}, {"Type", "Season"}, {"SeriesId", "series"}, {"IsFolder", true}};
+        auto episode = movie("episode", "The crossing");
+        episode["Type"] = "Episode"; episode["SeriesId"] = "series"; episode["SeriesName"] = "A series";
+        episode["SeasonId"] = "season"; episode["ParentIndexNumber"] = 1; episode["IndexNumber"] = 1;
+        m_network->respond = [=](const FixtureRequest &request) {
+            const auto path = request.request.url().path();
+            if (path.endsWith("/Items/series")) return FixtureResponse{QJsonDocument(series).toJson()};
+            if (path.endsWith("/Items/episode")) return FixtureResponse{QJsonDocument(episode).toJson()};
+            if (path.endsWith("/Seasons")) return FixtureResponse{QJsonDocument(QJsonObject{{"Items", QJsonArray{season}}}).toJson()};
+            if (path.endsWith("/Episodes")) return FixtureResponse{QJsonDocument(QJsonObject{{"Items", QJsonArray{episode}}}).toJson()};
+            return original(request);
+        };
+        QVERIFY(signIn());
+        const QVariant item = QVariantMap{{"id", "series"}, {"title", "A series"}, {"type", "Series"}, {"folder", true}};
+        QVERIFY(QMetaObject::invokeMethod(m_window, "activate", Q_ARG(QVariant, item)));
+        auto *view = qobject_cast<QQuickItem *>(object("detailView")); QVERIFY(view);
+        QTRY_VERIFY(view->isVisible()); QTRY_VERIFY(object("playButton")->property("activeFocus").toBool());
+        QCOMPARE(view->mapRectToScene(view->boundingRect()), QRectF(0, 0, m_window->width(), m_window->height()));
+        QVERIFY(!object("libraryScreen")->property("visible").toBool());
+        QVERIFY(!object("detailPopup"));
+        QCOMPARE(object("playButton")->property("text").toString(), "Seasons");
+        const auto preview = qEnvironmentVariable("JF_SERIES_SCREENSHOT");
+        if (!preview.isEmpty()) QVERIFY(m_window->grabWindow().save(preview));
+        QTest::keyClick(m_window, Qt::Key_Return);
+        QTRY_VERIFY(!view->isVisible()); QTRY_VERIFY(object("shelf-0")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Return);
+        QTRY_COMPARE(m_app->title(), "Season 1"); QTRY_VERIFY(!m_app->busy());
+        QTRY_VERIFY(object("shelf-0")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Return);
+        QTRY_VERIFY(view->isVisible()); QTRY_VERIFY(!m_app->detailLoading());
+        QTRY_VERIFY(object("playButton")->property("activeFocus").toBool());
+        QCOMPARE(m_app->detail()["type"].toString(), "Episode");
+        qobject_cast<QQuickItem *>(object("seriesButton"))->forceActiveFocus(); QTest::keyClick(m_window, Qt::Key_Return);
+        QTRY_COMPARE(m_app->detail()["type"].toString(), "Series");
+        QTest::keyClick(m_window, Qt::Key_Escape);
+        QTRY_COMPARE(m_app->detail()["type"].toString(), "Episode");
+        QTRY_VERIFY(object("playButton")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Escape);
+        QTRY_VERIFY(!view->isVisible()); QTRY_VERIFY(object("shelf-0")->property("activeFocus").toBool());
+        QCOMPARE(m_app->title(), "Season 1");
+        QCOMPARE(m_window->property("selectedMedia").toMap()["id"].toString(), "episode");
+    }
+    void profilePictureAndThemeSongLifecycle() {
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost));
+        QImage image(32, 32, QImage::Format_RGB32); image.fill(QColor("#76dfba"));
+        QByteArray png; QBuffer buffer(&png); QVERIFY(buffer.open(QIODevice::WriteOnly)); QVERIFY(image.save(&buffer, "PNG"));
+        QByteArray wav; QDataStream stream(&wav, QIODevice::WriteOnly); stream.setByteOrder(QDataStream::LittleEndian);
+        stream.writeRawData("RIFF", 4); stream << quint32(32036); stream.writeRawData("WAVEfmt ", 8);
+        stream << quint32(16) << quint16(1) << quint16(1) << quint32(8000) << quint32(16000) << quint16(2) << quint16(16);
+        stream.writeRawData("data", 4); stream << quint32(32000); wav.append(QByteArray(32000, '\0'));
+        QList<QUrl> assets;
+        connect(&server, &QTcpServer::newConnection, &server, [&] {
+            while (server.hasPendingConnections()) {
+                auto *socket = server.nextPendingConnection();
+                connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+                connect(socket, &QTcpSocket::readyRead, &server, [&, socket] {
+                    auto request = socket->property("request").toByteArray() + socket->readAll();
+                    socket->setProperty("request", request);
+                    if (!request.contains("\r\n\r\n") || socket->property("sent").toBool()) return;
+                    socket->setProperty("sent", true);
+                    const QUrl url("http://localhost" + QString::fromUtf8(request.split(' ').value(1))); assets.append(url);
+                    const bool audio = url.path().endsWith("/Audio/theme/stream");
+                    const auto data = audio ? wav : png;
+                    socket->write("HTTP/1.1 200 OK\r\nContent-Type: " + QByteArray(audio ? "audio/wav" : "image/png")
+                        + "\r\nContent-Length: " + QByteArray::number(data.size()) + "\r\nConnection: close\r\n\r\n" + data);
+                    socket->disconnectFromHost();
+                });
+            }
+        });
+        const auto original = m_network->respond;
+        const QJsonObject user{{"Id", "user"}, {"Name", "Fixture Viewer"}, {"PrimaryImageTag", "avatar-tag"}};
+        m_network->respond = [=](const FixtureRequest &request) {
+            const auto path = request.request.url().path();
+            if (path.endsWith("AuthenticateByName")) return FixtureResponse{QJsonDocument(QJsonObject{{"AccessToken", "fixture-token"}, {"User", user}}).toJson()};
+            if (path.endsWith("/Users/Me")) return FixtureResponse{QJsonDocument(user).toJson()};
+            if (path.endsWith("/ThemeSongs")) return FixtureResponse{R"({"Items":[{"Id":"theme"}],"OwnerId":"series"})", 200, 40};
+            return original(request);
+        };
+        auto *theme = m_app->findChild<MpvPlayer *>("themePlayer"); QVERIFY(theme);
+        QCOMPARE(mpv_set_property_string(theme->core()->handle, "options/ao", "null"), 0);
+        const auto base = QString("http://127.0.0.1:%1/base").arg(server.serverPort());
+        m_app->login(base, "fixture", "password", true);
+        QTRY_VERIFY(m_app->signedIn() && !m_app->busy());
+        const QUrl profile(m_app->profileImage());
+        QCOMPARE(profile.path(), "/base/Users/user/Images/Primary");
+        QCOMPARE(QUrlQuery(profile).queryItemValue("tag"), "avatar-tag");
+        QTRY_COMPARE(object("profileImage")->property("status").toInt(), 1);
+        QVERIFY(std::any_of(assets.begin(), assets.end(), [](const auto &url) { return url.path().endsWith("/Users/user/Images/Primary"); }));
+        qobject_cast<QQuickItem *>(object("profileButton"))->forceActiveFocus(); QTest::keyClick(m_window, Qt::Key_Return);
+        QTRY_VERIFY(object("optionsPopup")->property("visible").toBool());
+        QTest::keyClick(m_window, Qt::Key_Escape);
+        QSignalSpy loaded(theme, &MpvPlayer::loaded);
+        m_app->showDetails({{"id", "episode"}});
+        QTRY_VERIFY(!m_app->detailLoading());
+        QTRY_VERIFY_WITH_TIMEOUT(!loaded.isEmpty() && theme->position() > 0.1, 5000);
+        QVERIFY(!m_player->active());
+        double volume = 0; QCOMPARE(mpv_get_property(theme->core()->handle, "volume", MPV_FORMAT_DOUBLE, &volume), 0); QCOMPARE(volume, 35.0);
+        QVERIFY(std::any_of(assets.begin(), assets.end(), [](const auto &url) {
+            return url.path() == "/base/Audio/theme/stream" && QUrlQuery(url).queryItemValue("api_key") == "fixture-token";
+        }));
+        auto themeRequest = std::find_if(m_network->requests.cbegin(), m_network->requests.cend(), [](const auto &r) { return r.request.url().path().endsWith("/ThemeSongs"); });
+        QVERIFY(themeRequest != m_network->requests.cend());
+        QCOMPARE(QUrlQuery(themeRequest->request.url()).queryItemValue("InheritFromParent"), "true");
+        m_settings->setThemeSongs(false); QVERIFY(!theme->active());
+        m_settings->setThemeSongs(true); QTRY_VERIFY(theme->active());
+        m_app->closeDetails(); QVERIFY(!theme->active());
+        m_app->showDetails({{"id", "movie"}}); QTRY_VERIFY(!m_app->detailLoading());
+        m_app->closeDetails(); QTest::qWait(80); QVERIFY(!theme->active());
+        m_app->showDetails({{"id", "movie"}}); QTRY_VERIFY(!m_app->detailLoading());
+        m_app->play(m_app->detail()); QTRY_VERIFY(m_player->active()); QTest::qWait(80); QVERIFY(!theme->active());
+        m_app->stopPlayback(); m_app->logout(); QVERIFY(m_app->profileImage().isEmpty()); QVERIFY(!theme->active());
+        m_settings->put("accessToken", "fixture-token"); m_settings->put("userId", "user"); m_app->start();
+        QTRY_VERIFY(m_app->signedIn() && !m_app->busy()); QCOMPARE(m_app->profileImage(), profile.toString());
+        const auto withThemes = m_network->respond;
+        m_network->respond = [=](const FixtureRequest &request) {
+            if (request.request.url().path().endsWith("/ThemeSongs")) return FixtureResponse{"{}", 404};
+            return withThemes(request);
+        };
+        m_app->showDetails({{"id", "movie"}}); QTRY_VERIFY(!m_app->detailLoading());
+        QTest::qWait(80); QVERIFY(!theme->active()); QVERIFY(m_app->message().isEmpty());
+        m_app->logout();
+        m_network->respond = [=](const FixtureRequest &request) {
+            if (request.request.url().path().endsWith("AuthenticateByName"))
+                return FixtureResponse{R"({"AccessToken":"fixture-token","User":{"Id":"user","Name":"Fixture Viewer"}})"};
+            return original(request);
+        };
+        m_app->login(base, "fixture", "password", false);
+        QTRY_VERIFY(m_app->signedIn() && !m_app->busy()); QVERIFY(m_app->profileImage().isEmpty());
+        QTRY_VERIFY(object("profileInitial")->property("visible").toBool());
     }
     void blurHashDecodingAndLazyArtwork() {
         const auto black = BlurHashProvider::decode("000000");
@@ -239,16 +388,29 @@ private slots:
         QVERIFY(signIn());
         auto item = m_app->shelves().first().toMap()["items"].toList().first().toMap();
         m_app->showDetails(item); QTRY_VERIFY(!m_app->detailLoading());
-        m_app->setFavorite(m_app->detail(), true); QTRY_VERIFY(!m_app->updatingUserData());
+        auto *popup = object("detailView"); QVERIFY(QMetaObject::invokeMethod(popup, "open"));
+        QTRY_VERIFY(object("playButton")->property("activeFocus").toBool());
+        QVERIFY(!object("preplayQuality")->property("visible").toBool());
+        const auto preview = qEnvironmentVariable("JF_COMPACT_DETAIL_SCREENSHOT");
+        if (!preview.isEmpty()) QVERIFY(m_window->grabWindow().save(preview));
+        QTest::keyClick(m_window, Qt::Key_Down); QTest::keyClick(m_window, Qt::Key_Down);
+        QTRY_VERIFY(object("favoriteButton")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Return); QTRY_VERIFY(!m_app->updatingUserData());
         QVERIFY(m_app->detail()["favorite"].toBool());
+        QVERIFY(object("favoriteButton")->property("checked").toBool());
         QVERIFY(m_app->shelves().first().toMap()["items"].toList().first().toMap()["favorite"].toBool());
-        m_app->setPlayed(m_app->detail(), true); QTRY_VERIFY(!m_app->updatingUserData());
+        QTest::keyClick(m_window, Qt::Key_Right);
+        QTRY_VERIFY(object("watchedButton")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Return); QTRY_VERIFY(!m_app->updatingUserData());
         QVERIFY(m_app->detail()["played"].toBool()); QCOMPARE(m_app->detail()["progress"].toDouble(), 0.0);
+        QVERIFY(object("watchedButton")->property("checked").toBool());
         m_app->setFavorite(m_app->detail(), false); QTRY_VERIFY(!m_app->updatingUserData());
         QVERIFY(!m_app->detail()["favorite"].toBool());
         QCOMPARE(m_network->requests.last().operation, QNetworkAccessManager::DeleteOperation);
         m_app->setPlayed(m_app->detail(), false); QTRY_VERIFY(!m_app->updatingUserData());
         QVERIFY(!m_app->detail()["played"].toBool());
+        QTest::keyClick(m_window, Qt::Key_Escape);
+        QTRY_VERIFY(!popup->property("visible").toBool());
         m_app->home("Movies"); QTRY_VERIFY(!m_app->busy());
         m_app->setLibraryFilter("Favorites"); QTRY_VERIFY(!m_app->busy());
         QCOMPARE(QUrlQuery(m_network->requests.last().request.url()).queryItemValue("Filters"), "IsFavorite");
@@ -256,6 +418,7 @@ private slots:
         QCOMPARE(QUrlQuery(m_network->requests.last().request.url()).queryItemValue("SortBy"), "DateCreated");
         m_app->setLibraryFilter("Unwatched"); QTRY_VERIFY(!m_app->busy());
         QCOMPARE(QUrlQuery(m_network->requests.last().request.url()).queryItemValue("IsPlayed"), "false");
+        m_app->showDetails(item); QTRY_VERIFY(!m_app->detailLoading());
         m_network->respond = [](const FixtureRequest &) { return FixtureResponse{"{}", 500}; };
         m_app->setFavorite(m_app->detail(), true); QTRY_VERIFY(!m_app->updatingUserData());
         QVERIFY(!m_app->detail()["favorite"].toBool()); QVERIFY(m_app->message().contains("500"));
@@ -272,17 +435,19 @@ private slots:
         m_app->showDetails({{"id", "old"}}); m_app->closeDetails(); QTest::qWait(100);
         QVERIFY(m_app->detail().isEmpty()); QVERIFY(!m_app->detailLoading());
     }
-    void longDetailsStayInsideSmallModal() {
+    void longDetailsStayInsideSmallWindow() {
         QVERIFY(signIn());
         const QString longTitle = QString("A very long movie title with a distant destination ").repeated(8);
         m_network->respond = [this, longTitle](const FixtureRequest &request) {
             auto result = movie(request.request.url().path().section('/', -1), longTitle);
             result["Overview"] = QString("An extended description of the journey. ").repeated(30);
+            result["People"] = QJsonArray{QJsonObject{{"Name", "A performer"}, {"Role", "The traveler"}}};
+            result["Chapters"] = QJsonArray{QJsonObject{{"Name", "The crossing"}, {"StartPositionTicks", 1200000000}}};
             return FixtureResponse{QJsonDocument(result).toJson()};
         };
         m_window->resize(800, 500);
         m_app->showDetails({{"id", "long"}});
-        auto *popup = object("detailPopup"); QVERIFY(popup); QVERIFY(QMetaObject::invokeMethod(popup, "open"));
+        auto *popup = object("detailView"); QVERIFY(popup); QVERIFY(QMetaObject::invokeMethod(popup, "open"));
         QTRY_VERIFY(!m_app->detailLoading());
         auto *play = qobject_cast<QQuickItem *>(object("playButton")); QVERIFY(play);
         QTRY_VERIFY(play->hasActiveFocus());
@@ -292,15 +457,33 @@ private slots:
         };
         QTRY_VERIFY(insideScroll(play));
         QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("restartButton")->property("activeFocus").toBool());
-        QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("preplayQuality")->property("activeFocus").toBool());
-        QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("preplayAudio")->property("activeFocus").toBool());
-        QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("preplaySubtitle")->property("activeFocus").toBool());
         QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("favoriteButton")->property("activeFocus").toBool());
         QTRY_VERIFY(insideScroll(qobject_cast<QQuickItem *>(object("favoriteButton"))));
         QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("watchedButton")->property("activeFocus").toBool());
         QTRY_VERIFY(insideScroll(qobject_cast<QQuickItem *>(object("watchedButton"))));
+        QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("preplaySettingsButton")->property("activeFocus").toBool());
+        QVERIFY(!object("preplayQuality")->property("visible").toBool());
+        QTest::keyClick(m_window, Qt::Key_Return);
+        QTRY_VERIFY(object("preplayQuality")->property("visible").toBool());
+        QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("preplayQuality")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("preplayAudio")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("preplaySubtitle")->property("activeFocus").toBool());
+        QTRY_VERIFY(insideScroll(qobject_cast<QQuickItem *>(object("preplaySubtitle"))));
+        QTest::keyClick(m_window, Qt::Key_Up); QTest::keyClick(m_window, Qt::Key_Up); QTest::keyClick(m_window, Qt::Key_Up);
+        QTRY_VERIFY(object("preplaySettingsButton")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Return);
+        QTRY_VERIFY(!object("preplayQuality")->property("visible").toBool());
+        QTRY_VERIFY(insideScroll(qobject_cast<QQuickItem *>(object("preplaySettingsButton"))));
         const auto preview = qEnvironmentVariable("JF_DETAIL_SCREENSHOT");
         if (!preview.isEmpty()) QVERIFY(m_window->grabWindow().save(preview));
+        auto *chapter = qobject_cast<QQuickItem *>(object("chapterButton-0")); QVERIFY(chapter);
+        QVERIFY(!chapter->isVisible());
+        QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("detailExtrasButton")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Return); QTRY_VERIFY(chapter->isVisible());
+        QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(chapter->hasActiveFocus());
+        QTRY_VERIFY(insideScroll(chapter));
+        auto *close = qobject_cast<QQuickItem *>(object("detailBackButton")); QVERIFY(close);
+        QVERIFY(QRectF(0, 0, m_window->width(), m_window->height()).contains(close->mapRectToScene(close->boundingRect())));
         QTest::keyClick(m_window, Qt::Key_Escape);
         QTRY_VERIFY(!popup->property("visible").toBool());
     }
@@ -417,9 +600,18 @@ private slots:
         auto *view = qobject_cast<QQuickItem *>(object("playbackView")); QVERIFY(view); view->forceActiveFocus();
         QVERIFY(object("playerOverlay")->property("visible").toBool());
         QVERIFY(!object("endingTime")->property("text").toString().isEmpty());
-        qobject_cast<QQuickItem *>(object("playerQuality"))->forceActiveFocus();
+        const auto controlsPreview = qEnvironmentVariable("JF_PLAYER_SCREENSHOT");
+        if (!controlsPreview.isEmpty()) QVERIFY(m_window->grabWindow().save(controlsPreview));
+        qobject_cast<QQuickItem *>(object("playerSettings"))->forceActiveFocus();
         QTest::keyClick(m_window, Qt::Key_Return);
         QTRY_VERIFY(object("playerTrackPopup")->property("visible").toBool());
+        QTRY_VERIFY(object("playingQuality")->property("activeFocus").toBool());
+        qobject_cast<QQuickItem *>(object("playerInfo"))->forceActiveFocus();
+        QTest::keyClick(m_window, Qt::Key_Return);
+        QTRY_VERIFY(object("mediaInfoPopup")->property("visible").toBool());
+        QTest::keyClick(m_window, Qt::Key_Escape);
+        QTRY_VERIFY(!object("mediaInfoPopup")->property("visible").toBool());
+        QVERIFY(object("playerTrackPopup")->property("visible").toBool());
         QTRY_VERIFY(object("playingQuality")->property("activeFocus").toBool());
         QTest::keyClick(m_window, Qt::Key_Return); QTest::keyClick(m_window, Qt::Key_End); QTest::keyClick(m_window, Qt::Key_Return);
         QTRY_COMPARE(m_app->playbackOptions().value("quality").toInt(), 4000000);
@@ -427,7 +619,7 @@ private slots:
         QVERIFY(!object("playerTrackPopup")->property("visible").toBool());
         QTRY_COMPARE(m_window->activeFocusItem(), view);
         QTest::keyClick(m_window, Qt::Key_Down);
-        QTRY_VERIFY(object("playerAudio")->property("activeFocus").toBool());
+        QTRY_VERIFY(object("playerPause")->property("activeFocus").toBool());
         QTest::keyClick(m_window, Qt::Key_Up);
         QTRY_VERIFY(!object("playerOverlay")->property("visible").toBool());
         QVERIFY(m_player->active());

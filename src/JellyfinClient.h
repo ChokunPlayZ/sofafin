@@ -19,6 +19,7 @@ public:
     void post(const QString &path, const QJsonObject &body, Callback callback = {});
     void remove(const QString &path, const QUrlQuery &query, Callback callback = {});
     QString imageUrl(const QString &id, const QString &type, const QString &tag, int width) const;
+    QString userImageUrl(const QString &id, const QString &tag) const;
 signals:
     void unauthorized();
 private:

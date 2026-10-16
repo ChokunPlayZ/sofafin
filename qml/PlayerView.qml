@@ -73,7 +73,7 @@ FocusScope {
             if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) Player.togglePause()
             else if (event.key === Qt.Key_Left) App.seekRelative(-10)
             else if (event.key === Qt.Key_Right) App.seekRelative(10)
-            else if (event.key === Qt.Key_Down) { if (skipButton.visible) skipButton.forceActiveFocus(); else audioButton.forceActiveFocus() }
+            else if (event.key === Qt.Key_Down) { if (skipButton.visible) skipButton.forceActiveFocus(); else pauseButton.forceActiveFocus() }
             else if (event.key === Qt.Key_I) infoPopup.open()
             else return
         }
@@ -136,12 +136,10 @@ FocusScope {
             }
             RowLayout {
                 Layout.fillWidth: true; spacing: 8
-                NavButton { id: audioButton; objectName: "playerAudio"; text: "Audio"; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitWidth: 130; upTarget: playback; onNavigatedUp: playback.hideOverlay(); onClicked: playback.settings("audio") }
-                NavButton { objectName: "playerSubtitles"; text: "Subtitles"; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitWidth: 130; upTarget: playback; onNavigatedUp: playback.hideOverlay(); onClicked: playback.settings("subtitle") }
-                NavButton { objectName: "playerQuality"; text: "Quality"; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitWidth: 130; upTarget: playback; onNavigatedUp: playback.hideOverlay(); onClicked: playback.settings("quality") }
-                NavButton { objectName: "playerInfo"; text: "Info"; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitWidth: 100; upTarget: playback; onNavigatedUp: playback.hideOverlay(); onClicked: { playback.activity(); infoPopup.open() } }
-                NavButton { text: Player.paused ? "Resume" : "Pause"; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitWidth: 110; upTarget: playback; onNavigatedUp: playback.hideOverlay(); onClicked: { playback.activity(); Player.togglePause() } }
-                NavButton { text: "Stop"; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitWidth: 90; upTarget: playback; onNavigatedUp: playback.hideOverlay(); onClicked: App.stopPlayback() }
+                NavButton { id: pauseButton; objectName: "playerPause"; text: Player.paused ? "Resume" : "Pause"; primary: true; accent: playback.accent; implicitWidth: 120; upTarget: playback; onNavigatedUp: playback.hideOverlay(); onClicked: { playback.activity(); Player.togglePause() } }
+                Item { Layout.fillWidth: true }
+                NavButton { objectName: "playerSettings"; text: "Playback settings"; flat: true; upTarget: playback; onNavigatedUp: playback.hideOverlay(); onClicked: playback.settings("quality") }
+                NavButton { text: "Stop"; flat: true; implicitWidth: 90; upTarget: playback; onNavigatedUp: playback.hideOverlay(); onClicked: App.stopPlayback() }
             }
         }
     }
@@ -152,7 +150,7 @@ FocusScope {
         visible: !!playback.segment.type && !playback.pauseScreenVisible
         text: "Skip " + ({Intro: "intro", Outro: "credits", Recap: "recap", Preview: "preview", Commercial: "commercial"})[playback.segment.type]
         primary: true; accent: playback.accent
-        upTarget: playback; downTarget: audioButton
+        upTarget: playback; downTarget: pauseButton
         onNavigatedUp: playback.hideOverlay()
         onClicked: { playback.activity(); App.skipSegment(); playback.focusVideo() }
         onVisibleChanged: if (!visible && activeFocus) playback.focusVideo()
@@ -172,7 +170,12 @@ FocusScope {
         background: Rectangle { color: "#15202d"; radius: 8; border.color: "#425263" }
         contentItem: ColumnLayout {
             id: trackColumn; spacing: 16
-            Text { text: "Playback"; color: "white"; font.pixelSize: 24; font.weight: Font.DemiBold }
+            RowLayout {
+                Layout.fillWidth: true
+                Text { text: "Playback"; color: "white"; font.pixelSize: 24; font.weight: Font.DemiBold; Layout.fillWidth: true }
+                NavButton { objectName: "playerInfo"; text: "Info"; flat: true; implicitWidth: 70; onClicked: infoPopup.open() }
+                IconButton { text: "Close"; iconName: "close"; onClicked: trackPopup.close() }
+            }
             PlaybackOptions {
                 id: tracks
                 namePrefix: "playing"; live: true; Layout.fillWidth: true
@@ -185,7 +188,6 @@ FocusScope {
                 onAudioSelected: value => { App.setPlaybackTrack(false, value); trackPopup.close() }
                 onSubtitleSelected: value => { App.setPlaybackTrack(true, value); trackPopup.close() }
             }
-            NavButton { text: "Done"; Layout.fillWidth: true; onClicked: trackPopup.close() }
         }
     }
     Popup {
@@ -197,16 +199,19 @@ FocusScope {
         modal: true; focus: true; padding: 24; closePolicy: Popup.CloseOnEscape
         onOpened: infoDone.forceActiveFocus()
         onAboutToHide: playback.popupClosing = true
-        onClosed: Qt.callLater(() => { playback.hideOverlay(); playback.popupClosing = false })
+        onClosed: Qt.callLater(() => { if (trackPopup.visible) tracks.focusQuality(); else playback.hideOverlay(); playback.popupClosing = false })
         background: Rectangle { color: "#15202d"; radius: 8; border.color: "#425263" }
         contentItem: ColumnLayout {
             spacing: 16
-            Text { text: "Media info"; color: "white"; font.pixelSize: 24; font.weight: Font.DemiBold }
+            RowLayout {
+                Layout.fillWidth: true
+                Text { text: "Media info"; color: "white"; font.pixelSize: 24; font.weight: Font.DemiBold; Layout.fillWidth: true }
+                IconButton { id: infoDone; text: "Close"; iconName: "close"; onClicked: infoPopup.close() }
+            }
             ScrollView {
                 Layout.fillWidth: true; Layout.fillHeight: true; clip: true; contentWidth: availableWidth
                 Text { width: parent.width; text: (App.playMethod === "DirectPlay" ? "Direct play" : "Transcoding") + "\n" + (App.currentSource.mediaInfo || "") + "\n\nAudio: " + Player.audioTrack + "\nSubtitles: " + Player.subtitleTrack; color: "#c3cbd4"; font.pixelSize: 16; wrapMode: Text.Wrap }
             }
-            NavButton { id: infoDone; text: "Done"; Layout.fillWidth: true; onClicked: infoPopup.close() }
         }
     }
 }

@@ -14,7 +14,7 @@ add_library(jf-native STATIC src/ControllerInput.cpp src/MpvPlayer.cpp src/MpvVi
 target_link_libraries(jf-native PUBLIC jf-core Qt6::Quick Qt6::QuickControls2 Qt6::OpenGL PkgConfig::MPV PkgConfig::SDL2)
 qt_add_executable(jf-gamescope src/main.cpp)
 target_link_libraries(jf-gamescope PRIVATE jf-native)
-set(JF_UI qml/Main.qml qml/NavButton.qml qml/MediaShelf.qml qml/Artwork.qml qml/DetailPopup.qml qml/PlaybackOptions.qml qml/OptionSelector.qml qml/PlayerView.qml assets/logo.svg)
+set(JF_UI qml/Main.qml qml/NavButton.qml qml/IconButton.qml qml/ProfileButton.qml qml/MediaShelf.qml qml/Artwork.qml qml/DetailView.qml qml/PlaybackOptions.qml qml/OptionSelector.qml qml/PlayerView.qml assets/logo.svg assets/search.svg assets/settings.svg assets/close.svg assets/back.svg)
 qt_add_resources(jf-gamescope ui PREFIX "/" FILES ${JF_UI})
 target_compile_options(jf-core PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_options(jf-gamescope PRIVATE -Wall -Wextra -Wpedantic)
