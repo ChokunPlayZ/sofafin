@@ -17,6 +17,11 @@ MpvPlayer::MpvPlayer(QObject *parent, bool audioOnly) : QObject(parent), m_core(
         mpv_set_option_string(h, "loop-file", "inf");
         m_ready = true;
     } else {
+        // The controller owns episode transitions, including cancellation and
+        // session reporting. Hold EOF until it explicitly advances the playlist.
+        mpv_set_option_string(h, "keep-open", "always");
+        mpv_set_option_string(h, "keep-open-pause", "no");
+        mpv_set_option_string(h, "prefetch-playlist", "yes");
         // Keep downloading continuously, with room for large UHD streams and
         // cached backward seeks. These are ceilings, not upfront allocations.
         for (const auto &[key, value] : {std::pair{"cache", "yes"}, {"cache-secs", "3600"},
@@ -31,11 +36,13 @@ MpvPlayer::MpvPlayer(QObject *parent, bool audioOnly) : QObject(parent), m_core(
     mpv_observe_property(h, 0, "pause", MPV_FORMAT_FLAG);
     mpv_observe_property(h, 0, "paused-for-cache", MPV_FORMAT_FLAG);
     mpv_observe_property(h, 0, "demuxer-cache-time", MPV_FORMAT_DOUBLE);
+    mpv_observe_property(h, 0, "demuxer-cache-state", MPV_FORMAT_NODE);
     mpv_observe_property(h, 0, "cache-buffering-state", MPV_FORMAT_INT64);
     mpv_observe_property(h, 0, "cache-speed", MPV_FORMAT_INT64);
     mpv_observe_property(h, 0, "track-list", MPV_FORMAT_NODE);
     mpv_observe_property(h, 0, "aid", MPV_FORMAT_NONE);
     mpv_observe_property(h, 0, "sid", MPV_FORMAT_NONE);
+    if (!audioOnly) mpv_observe_property(h, 0, "eof-reached", MPV_FORMAT_FLAG);
     mpv_set_wakeup_callback(h, [](void *ctx) {
         auto *self = static_cast<MpvPlayer *>(ctx);
         QMetaObject::invokeMethod(self, [self] { self->drainEvents(); }, Qt::QueuedConnection);
@@ -56,10 +63,15 @@ int MpvPlayer::command(std::initializer_list<QByteArray> args, quint64 request) 
     return mpv_command_async(m_core->handle, request, ptrs.data());
 }
 void MpvPlayer::load(const QUrl &url, double start, double offset, double duration, bool hwdec) {
+    m_loadPrefetched = m_prefetchQueued && url == m_prefetchUrl && start == 0;
+    if (m_loadPrefetched) {
+        m_prefetchUrl = QUrl(); m_prefetchQueued = false; ++m_prefetchRequest;
+    } else clearPrefetch();
     ++m_trackGeneration; m_audioIds.clear(); m_subtitleIds.clear();
     m_pendingAudio = m_pendingSubtitle = -3; m_audio = "Auto"; m_subtitle = "Off";
     m_pendingUrl = url; m_start = start; m_offset = offset;
     m_position = start; m_duration = duration; m_active = true; m_paused = false; m_hasFrame = false;
+    m_fullyBuffered = false;
     m_fileLoading = m_seekLoading = true; m_cacheLoading = false; m_pendingSeek = 0;
     m_buffered = 0; m_bufferPercent = 0; m_networkSpeed = -1;
     m_networkStream = url.scheme() == "http" || url.scheme() == "https";
@@ -85,14 +97,55 @@ void MpvPlayer::loadPending() {
     // Set the next file's start option separately: works across mpv's 0.38 loadfile argument change.
     mpv_set_property_string(m_core->handle, "options/start", QByteArray::number(m_start, 'f', 3).constData());
     command({"set", "pause", "no"});
-    command({"loadfile", m_pendingUrl.toEncoded(), "replace"});
+    if (m_loadPrefetched) {
+        command({"playlist-next", "force"});
+        command({"playlist-clear"});
+    } else command({"loadfile", m_pendingUrl.toEncoded(), "replace"});
+    m_loadPrefetched = false;
     m_pendingUrl = QUrl();
+    queuePrefetch();
+}
+void MpvPlayer::prefetch(const QUrl &url) {
+    if (!m_active || url.isEmpty() || url == m_prefetchUrl) return;
+    clearPrefetch();
+    m_prefetchUrl = url;
+    if (m_ready && m_pendingUrl.isEmpty()) queuePrefetch();
+}
+void MpvPlayer::queuePrefetch() {
+    if (m_prefetchUrl.isEmpty() || m_prefetchQueued) return;
+    // Named arguments avoid the loadfile positional change in mpv 0.38.
+    // File-local defaults prevent a resumed episode's start/tracks leaking.
+    QByteArray url = m_prefetchUrl.toEncoded();
+    char *optionKeys[] = {const_cast<char *>("start"), const_cast<char *>("aid"),
+        const_cast<char *>("sid"), const_cast<char *>("sub-delay")};
+    mpv_node options[] = {{{.string = const_cast<char *>("0")}, MPV_FORMAT_STRING},
+        {{.string = const_cast<char *>("auto")}, MPV_FORMAT_STRING},
+        {{.string = const_cast<char *>("auto")}, MPV_FORMAT_STRING},
+        {{.string = const_cast<char *>("0")}, MPV_FORMAT_STRING}};
+    mpv_node_list optionList{4, options, optionKeys};
+    char *keys[] = {const_cast<char *>("name"), const_cast<char *>("url"),
+        const_cast<char *>("flags"), const_cast<char *>("options")};
+    mpv_node values[] = {{{.string = const_cast<char *>("loadfile")}, MPV_FORMAT_STRING},
+        {{.string = url.data()}, MPV_FORMAT_STRING},
+        {{.string = const_cast<char *>("append")}, MPV_FORMAT_STRING},
+        {{.list = &optionList}, MPV_FORMAT_NODE_MAP}};
+    mpv_node_list list{4, values, keys};
+    mpv_node args{{.list = &list}, MPV_FORMAT_NODE_MAP};
+    m_prefetchQueued = mpv_command_node_async(m_core->handle, ++m_prefetchRequest, &args) >= 0;
+    if (!m_prefetchQueued) m_prefetchUrl = QUrl();
+}
+void MpvPlayer::clearPrefetch() {
+    ++m_prefetchRequest;
+    if (m_prefetchQueued) command({"playlist-clear"});
+    m_prefetchUrl = QUrl(); m_prefetchQueued = false;
 }
 void MpvPlayer::rendererReady() { m_ready = true; loadPending(); }
 void MpvPlayer::rendererFailed() { m_ready = false; stop(); emit error("Could not initialize the OpenGL video renderer."); }
 void MpvPlayer::stop() {
+    clearPrefetch(); m_loadPrefetched = false;
     ++m_trackGeneration; m_audioIds.clear(); m_subtitleIds.clear(); m_pendingAudio = m_pendingSubtitle = -3;
     m_pendingUrl = QUrl(); m_active = m_hasFrame = false; m_pendingSeek = 0;
+    m_fullyBuffered = false;
     m_fileLoading = m_cacheLoading = m_seekLoading = m_paused = false;
     m_start = m_position = m_offset = m_duration = 0; m_audio = "Auto"; m_subtitle = "Off";
     m_buffered = 0; m_bufferPercent = 0; m_networkSpeed = -1;
@@ -112,6 +165,7 @@ void MpvPlayer::seek(double seconds) {
     if (!m_active) return;
     // Show feedback before mpv starts the network seek or decoder catch-up.
     m_seekLoading = true; m_bufferPercent = 0; m_pendingSeek = ++m_seekGeneration;
+    m_fullyBuffered = false;
     if (command({"seek", QByteArray::number(qMax(0.0, seconds - m_offset), 'f', 3), "absolute+exact"}, m_pendingSeek) < 0) {
         m_pendingSeek = 0; m_seekLoading = false;
     }
@@ -171,10 +225,12 @@ void MpvPlayer::drainEvents() {
     for (;;) {
         auto *event = mpv_wait_event(m_core->handle, 0);
         if (event->event_id == MPV_EVENT_NONE) break;
-        if (event->event_id == MPV_EVENT_FILE_LOADED) {
+        if (event->event_id == MPV_EVENT_FILE_LOADED && m_active) {
             m_fileLoading = false; emit loaded();
             mpv_get_property_async(m_core->handle, m_trackGeneration, "track-list", MPV_FORMAT_NODE);
         }
+        if (event->event_id == MPV_EVENT_COMMAND_REPLY && event->reply_userdata == m_prefetchRequest && event->error < 0)
+            clearPrefetch(); // Speculative failures fall back to a normal load.
         if (event->event_id == MPV_EVENT_COMMAND_REPLY && m_pendingSeek && event->reply_userdata == m_pendingSeek) {
             m_pendingSeek = 0;
             if (event->error < 0) m_seekLoading = false;
@@ -199,6 +255,17 @@ void MpvPlayer::drainEvents() {
                 if (name == "demuxer-cache-time") m_buffered = *static_cast<double *>(p->data);
             }
             if (name == "demuxer-cache-time" && (!m_active || !p->data)) m_buffered = 0;
+            if (name == "demuxer-cache-state") {
+                m_fullyBuffered = false;
+                if (m_active && p->data && p->format == MPV_FORMAT_NODE) {
+                    const auto &state = *static_cast<mpv_node *>(p->data);
+                    if (state.format == MPV_FORMAT_NODE_MAP) for (int i = 0; i < state.u.list->num; ++i) {
+                        const auto &value = state.u.list->values[i];
+                        if (QByteArray(state.u.list->keys[i]) == "eof" && value.format == MPV_FORMAT_FLAG)
+                            m_fullyBuffered = value.u.flag;
+                    }
+                }
+            }
             if (m_active && name == "cache-buffering-state" && p->data && p->format == MPV_FORMAT_INT64)
                 m_bufferPercent = qBound(0, int(*static_cast<int64_t *>(p->data)), 100);
             if (name == "cache-speed")
@@ -207,19 +274,27 @@ void MpvPlayer::drainEvents() {
             if (p->data && p->format == MPV_FORMAT_FLAG) {
                 if (name == "pause") m_paused = m_active && *static_cast<int *>(p->data);
                 if (name == "paused-for-cache") m_cacheLoading = m_active && *static_cast<int *>(p->data);
+                if (name == "eof-reached" && m_active && !m_fileLoading && *static_cast<int *>(p->data))
+                    finishPlayback(false);
             }
             if (name == "track-list" && p->data && p->format == MPV_FORMAT_NODE) updateTracks(*static_cast<mpv_node *>(p->data));
             if (name == "aid" || name == "sid") mpv_get_property_async(m_core->handle, m_trackGeneration, "track-list", MPV_FORMAT_NODE);
         }
         if (event->event_id == MPV_EVENT_END_FILE) {
             const auto *end = static_cast<mpv_event_end_file *>(event->data);
-            if (end->reason == MPV_END_FILE_REASON_EOF || end->reason == MPV_END_FILE_REASON_ERROR) {
-                m_active = m_hasFrame = false; m_fileLoading = m_cacheLoading = m_seekLoading = false;
-                m_pendingSeek = 0; m_networkSpeed = -1;
-                if (end->reason == MPV_END_FILE_REASON_EOF) emit ended();
-                else emit error("mpv could not play this stream. Check the connection or try transcoding in Settings.");
-            }
+            if (m_active && (end->reason == MPV_END_FILE_REASON_EOF || end->reason == MPV_END_FILE_REASON_ERROR))
+                finishPlayback(end->reason == MPV_END_FILE_REASON_ERROR);
         }
         emit changed();
     }
+}
+void MpvPlayer::finishPlayback(bool failed) {
+    m_active = m_hasFrame = false; m_fileLoading = m_cacheLoading = m_seekLoading = false;
+    m_fullyBuffered = false;
+    m_pendingSeek = 0; m_networkSpeed = -1;
+    if (failed) {
+        clearPrefetch();
+        command({"stop"});
+        emit error("mpv could not play this stream. Check the connection or try transcoding in Settings.");
+    } else emit ended();
 }

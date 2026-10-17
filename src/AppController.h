@@ -110,6 +110,9 @@ private:
     void refreshSegments();
     void fetchNextEpisode();
     void resetNextEpisode();
+    void prebufferNextEpisode();
+    void clearNextEpisodeBuffer();
+    void stopEncoding(const Playback::Plan &plan);
     void report(const QString &event);
     void finishSession();
     void setError(const QString &error);
@@ -143,6 +146,9 @@ private:
     QVariantMap m_nextEpisode;
     int m_nextEpisodeGeneration = 0;
     bool m_nextEpisodeCancelled = false;
+    int m_prebufferGeneration = 0;
+    bool m_prebufferPending = false, m_prebufferAttempted = false;
+    Playback::Plan m_nextPlan;
     bool m_resumePaused = false;
     Playback::Plan m_plan;
     QTimer m_progress;

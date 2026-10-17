@@ -33,6 +33,7 @@ AppController::AppController(Settings *settings, MpvPlayer *player, QObject *par
     });
     connect(&m_api, &JellyfinClient::unauthorized, this, [this] { logout(); notify("Your session expired. Sign in again."); });
     connect(player, &MpvPlayer::error, this, [this](const QString &error) { stopPlayback(); setError(error); });
+    connect(player, &MpvPlayer::changed, this, [this] { prebufferNextEpisode(); });
     connect(player, &MpvPlayer::ended, this, [this] {
         if (autoplayNextEpisode()) playNextEpisode();
         else { stopPlayback(); if (signedIn()) home(); }
@@ -466,6 +467,7 @@ void AppController::play(const QVariantMap &item, bool resume, const QVariantMap
     fetchNextEpisode();
 }
 void AppController::resetNextEpisode() {
+    clearNextEpisodeBuffer();
     ++m_nextEpisodeGeneration;
     m_nextEpisode.clear(); m_nextEpisodeCancelled = false;
     emit nextEpisodeChanged();
@@ -487,7 +489,38 @@ void AppController::fetchNextEpisode() {
             || next.value("id") == itemId || next.value("seriesId") != seriesId) return;
         m_nextEpisode = next;
         emit nextEpisodeChanged();
+        prebufferNextEpisode();
     });
+}
+void AppController::prebufferNextEpisode() {
+    if (!autoplayNextEpisode() || m_negotiating || !m_player->active() || !m_plan.valid()
+        || !m_player->fullyBuffered() || m_prebufferPending || m_prebufferAttempted || m_nextPlan.valid()) return;
+    m_prebufferPending = m_prebufferAttempted = true;
+    const int generation = ++m_prebufferGeneration;
+    const auto itemId = m_nextEpisode.value("id").toString();
+    const int quality = m_playbackOptions.value("quality", 0).toInt();
+    const QString mode = quality > 0 ? "transcode" : quality == -1 ? "direct" : m_settings->playbackMode();
+    // Only quality carries across episodes; sources and track indices are file-specific.
+    m_api.post("Items/" + itemId + "/PlaybackInfo",
+        Playback::request(m_userId, mode, quality > 0 ? quality : m_settings->bitrate(), 0),
+        [this, generation, itemId, mode](const QJsonObject &response, const QString &error) {
+        const auto plan = Playback::negotiate(response, m_api.server(), itemId,
+            m_api.deviceId(), m_api.token(), mode, 0);
+        if (generation != m_prebufferGeneration) {
+            stopEncoding(plan);
+            return;
+        }
+        m_prebufferPending = false;
+        if (!error.isEmpty() || !plan.valid() || !m_player->fullyBuffered()) { stopEncoding(plan); return; }
+        m_nextPlan = plan;
+        m_player->prefetch(plan.url);
+    });
+}
+void AppController::clearNextEpisodeBuffer() {
+    ++m_prebufferGeneration; m_prebufferPending = m_prebufferAttempted = false;
+    m_player->clearPrefetch();
+    stopEncoding(m_nextPlan);
+    m_nextPlan = {};
 }
 void AppController::playNextEpisode() {
     if (!signedIn() || m_negotiating || !autoplayNextEpisode()
@@ -495,11 +528,26 @@ void AppController::playNextEpisode() {
     // Source IDs and stream indices belong to the previous file. Carry only its quality choice.
     const auto next = m_nextEpisode;
     const QVariantMap options{{"quality", m_playbackOptions.value("quality", 0)}};
+    if (m_nextPlan.valid()) {
+        const auto plan = m_nextPlan;
+        m_nextPlan = {}; // This session becomes active, so reset must not stop its encoding.
+        finishSession();
+        ++m_playGeneration;
+        m_currentItem = next; m_plan = plan; m_resumePaused = false;
+        m_playbackOptions = options; m_playbackOptions["sourceId"] = plan.mediaSourceId;
+        m_segments.clear(); m_serverSegments.clear(); m_message.clear();
+        // Advance the existing playlist entry to retain its demuxer cache.
+        m_player->load(plan.url, 0, plan.offset, next.value("runtime").toDouble(), m_settings->hardwareDecoding());
+        resetNextEpisode();
+        fetchPlaybackMarkers(); fetchNextEpisode(); emit changed();
+        return;
+    }
     finishSession();
     play(next, false, options);
 }
 void AppController::cancelNextEpisode() {
     m_nextEpisodeCancelled = true;
+    clearNextEpisodeBuffer();
     emit nextEpisodeChanged();
 }
 void AppController::fetchPlaybackMarkers() {
@@ -529,6 +577,7 @@ void AppController::refreshSegments() {
     emit changed();
 }
 void AppController::beginPlay(const QVariantMap &item, qint64 startTicks, bool paused) {
+    clearNextEpisodeBuffer();
     stopThemeSong();
     m_negotiating = true; emit changed();
     finishSession(); m_player->stop(); m_currentItem = item; m_resumePaused = paused;
@@ -552,6 +601,7 @@ void AppController::beginPlay(const QVariantMap &item, qint64 startTicks, bool p
         m_player->load(m_plan.url, m_plan.method == "DirectPlay" ? double(startTicks) / 10000000 : 0,
             m_plan.offset, m_currentItem.value("runtime").toDouble(), m_settings->hardwareDecoding());
         emit changed();
+        prebufferNextEpisode();
     });
 }
 void AppController::setQuality(int bitrate) {
@@ -587,9 +637,12 @@ void AppController::report(const QString &event) {
 void AppController::finishSession() {
     m_progress.stop();
     if (m_reportedStart) report("Playing/Stopped");
-    if (m_plan.method == "Transcode" && !m_plan.sessionId.isEmpty())
-        m_api.remove("Videos/ActiveEncodings", query({{"DeviceId", m_api.deviceId()}, {"PlaySessionId", m_plan.sessionId}}));
+    stopEncoding(m_plan);
     m_plan = {}; m_reportedStart = false;
+}
+void AppController::stopEncoding(const Playback::Plan &plan) {
+    if (plan.method == "Transcode" && !plan.sessionId.isEmpty())
+        m_api.remove("Videos/ActiveEncodings", query({{"DeviceId", m_api.deviceId()}, {"PlaySessionId", plan.sessionId}}));
 }
 void AppController::stopPlayback() {
     ++m_playGeneration; ++m_markerGeneration; m_segments.clear(); m_serverSegments.clear(); m_negotiating = false;
