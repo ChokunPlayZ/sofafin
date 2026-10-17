@@ -63,6 +63,7 @@ The interface scales automatically for the display resolution. **Settings → UI
 - Scrollable detail pages with controller focus scrolling, including long titles at 800×500.
 - Direct play over authenticated HTTP and Jellyfin-negotiated HLS transcoding, selected using a libmpv device profile.
 - Resume, pause, seeking, buffer progress with download speed, estimated ending time, and series/episode information.
+- Automatic next-episode playback with a countdown, episode details, Start now, and Close to finish the current episode and exit the player.
 - Quality, audio, subtitle, and media-version selection before playback; quality and track changes during playback preserve position and pause state.
 - Media details for the source container, bitrate, size, codecs, resolution, and tracks.
 - Intro, credits, recap, preview, and commercial skip buttons from Jellyfin’s Media Segment API when the server supplies segments.
@@ -70,6 +71,8 @@ The interface scales automatically for the display resolution. **Settings → UI
 - Automatic / direct-only / forced-transcoding modes, bitrate limits, hardware decoding, fullscreen, UI scale, and accent colors.
 
 The player timeline marks chapter starts with white ticks and media segments with colored ranges. A legend identifies each segment type; the seek preview shows the chapter name and segment at the preview position. Chapters load when playback starts, including when playing directly from a shelf. When the Media Segment API returns no segments, explicitly named chapters such as Opening, OP, Intro, Outro, ED, or Credits provide skip ranges ending at the next chapter (or the end of the title). Other chapter names remain timeline markers without skip buttons.
+
+Series episodes automatically continue in server episode order, including across seasons. During the final 30 seconds, the player shows “Next Episode in x seconds” with the next episode's season, number, and title below it. If the last skip segment reaches the end of the episode, this prompt appears at that segment's start in place of the skip button. The countdown follows playback, including pauses and seeks. Choose **Start now** to continue immediately, or **Close** to cancel autoplay for the current episode and exit the player when it finishes. Down from the video selects Start now; Left/Right selects Close. The next episode starts from the beginning with the current quality choice and its own default tracks. The last episode, missing next-episode data, and playback failures do not advance.
 
 Direct play is preferred across the media versions Jellyfin returns. Direct-only mode shows an error if none is playable. Automatic mode permits server transcoding; forced-transcoding mode disables video/audio stream copying. Transcoded seeking requests a fresh stream at the target position so playback progress remains on the source timeline. Global playback settings apply to the next stream. Player quality and track selections apply immediately. Automatic uses the global playback mode and bitrate limit, Original requires direct play, and a specific bitrate requests transcoding.
 
@@ -118,7 +121,7 @@ QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software \
   ./build/jf-gamescope --windowed --smoke-test --screenshot /tmp/jf-gamescope.png
 ```
 
-Known limits: no Quick Connect, automatic next-episode playback, HDR certification, or bundled distribution yet. The actual Steam keyboard overlay, OpenGL surface, hardware decoding, Gamescope integration, and physical controller mappings require hardware validation. Live TV, music, and playlists are deferred in [BACKLOG.md](BACKLOG.md); downloads are out of scope.
+Known limits: no Quick Connect, HDR certification, or bundled distribution yet. The actual Steam keyboard overlay, OpenGL surface, hardware decoding, Gamescope integration, and physical controller mappings require hardware validation. Live TV, music, and playlists are deferred in [BACKLOG.md](BACKLOG.md); downloads are out of scope.
 
 ## Source layout
 

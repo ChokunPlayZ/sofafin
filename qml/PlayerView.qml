@@ -20,6 +20,22 @@ FocusScope {
         const position = Player.position
         return App.mediaSegments.find(s => position >= s.start && position < s.end) || ({})
     }
+    readonly property var finalSegment: {
+        const segments = App.mediaSegments
+        const last = segments.length ? segments[segments.length - 1] : ({})
+        // Segment providers and the decoded duration can differ by a fraction of a second.
+        return Player.duration > 0 && Math.abs(last.end - Player.duration) <= 1 ? last : ({})
+    }
+    readonly property real nextEpisodeStart: finalSegment.start !== undefined
+        ? finalSegment.start : Math.max(0, Player.duration - 30)
+    readonly property int nextEpisodeSeconds: Math.max(0, Math.ceil(Player.duration - Player.position))
+    readonly property string nextEpisodeInfo: {
+        const next = App.nextEpisode
+        const number = next.seasonNumber !== undefined && next.seasonNumber !== null
+            && next.episodeNumber !== undefined && next.episodeNumber !== null
+            ? "S" + next.seasonNumber + " · E" + next.episodeNumber + "  " : ""
+        return number + (next.title || "")
+    }
     property date clockTime: new Date()
     readonly property string endingTime: Player.duration > 0
         ? new Date(clockTime.getTime() + Math.max(0, Player.duration - Player.position) * 1000).toLocaleTimeString(Qt.locale(), "hh:mm") : ""
@@ -94,7 +110,11 @@ FocusScope {
                     seekBar.forceActiveFocus()
                     seekBar.nudgeKey(event.key === Qt.Key_Left ? -1 : 1)
                 }
-            } else if (event.key === Qt.Key_Down) { if (skipButton.visible) skipButton.forceActiveFocus(); else seekBar.forceActiveFocus() }
+            } else if (event.key === Qt.Key_Down) {
+                if (nextEpisodePanel.visible) nextEpisodeNow.forceActiveFocus()
+                else if (skipButton.visible) skipButton.forceActiveFocus()
+                else seekBar.forceActiveFocus()
+            }
             else if (event.key === Qt.Key_I) infoPopup.open()
             else return
         }
@@ -193,12 +213,66 @@ FocusScope {
         objectName: "skipSegmentButton"
         anchors { right: parent.right; bottom: parent.bottom; margins: 28; bottomMargin: overlay.visible ? overlay.height + 12 : 35 }
         visible: !!playback.segment.type && !playback.pauseScreenVisible && !seekBar.seeking && !App.playbackPending
+            && !nextEpisodePanel.visible
+            && !(App.nextEpisode.id && playback.segment.start === playback.finalSegment.start)
         text: "Skip " + ({Intro: "intro", Outro: "credits", Recap: "recap", Preview: "preview", Commercial: "commercial"})[playback.segment.type]
         primary: true; accent: playback.accent
         upTarget: playback; downTarget: seekBar
         onNavigatedUp: playback.hideOverlay()
         onClicked: { playback.activity(); App.skipSegment(); playback.focusVideo() }
         onVisibleChanged: if (!visible && activeFocus) playback.focusVideo()
+    }
+    Rectangle {
+        id: nextEpisodePanel
+        objectName: "nextEpisodePrompt"
+        anchors { right: parent.right; bottom: parent.bottom; margins: 28; bottomMargin: overlay.visible ? overlay.height + 12 : 35 }
+        width: Math.min(440, playback.width - 56)
+        height: nextEpisodeColumn.implicitHeight + 32
+        radius: 8; color: "#ed15202d"; border.color: "#425263"
+        visible: Player.active && Player.duration > 0 && App.autoplayNextEpisode && !App.playbackPending
+            && !seekBar.seeking && Player.position >= playback.nextEpisodeStart
+        onVisibleChanged: if (!visible && (nextEpisodeNow.activeFocus || nextEpisodeClose.activeFocus)) playback.focusVideo()
+        Keys.onEscapePressed: { App.cancelNextEpisode(); playback.focusVideo() }
+        ColumnLayout {
+            id: nextEpisodeColumn
+            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 16 }
+            spacing: 10
+            Text {
+                objectName: "nextEpisodeCountdown"
+                Layout.fillWidth: true
+                text: "Next Episode in " + playback.nextEpisodeSeconds + " seconds"
+                color: "white"; font.pixelSize: 20; font.weight: Font.DemiBold
+                wrapMode: Text.Wrap
+            }
+            Text {
+                objectName: "nextEpisodeInfo"
+                Layout.fillWidth: true
+                text: playback.nextEpisodeInfo
+                color: "#c3cbd4"; font.pixelSize: 16
+                wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                NavButton {
+                    id: nextEpisodeNow
+                    objectName: "nextEpisodeNow"
+                    text: "Start now"; primary: true; accent: playback.accent
+                    Layout.fillWidth: true
+                    upTarget: playback; downTarget: seekBar; rightTarget: nextEpisodeClose; leftTarget: nextEpisodeClose
+                    onNavigatedUp: playback.hideOverlay()
+                    onClicked: App.playNextEpisode()
+                }
+                NavButton {
+                    id: nextEpisodeClose
+                    objectName: "nextEpisodeClose"
+                    text: "Close"
+                    upTarget: playback; downTarget: seekBar; leftTarget: nextEpisodeNow; rightTarget: nextEpisodeNow
+                    onNavigatedUp: playback.hideOverlay()
+                    onClicked: { App.cancelNextEpisode(); playback.focusVideo() }
+                }
+            }
+        }
     }
     Timer { id: hideControls; interval: 4000; onTriggered: if (playback.Window.window.activeFocusItem === playback && !trackPopup.visible && !infoPopup.visible && !Player.paused) playback.controlsVisible = false }
     Timer { id: pauseDelay; objectName: "pauseScreenTimer"; interval: 10000; onTriggered: if (playback.isPaused && playback.Window.window.activeFocusItem === playback && !trackPopup.visible && !infoPopup.visible) { playback.controlsVisible = false; playback.pauseScreenVisible = true; playback.focusVideo() } }

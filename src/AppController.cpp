@@ -32,8 +32,11 @@ AppController::AppController(Settings *settings, MpvPlayer *player, QObject *par
         if (m_themeEnabled && !m_detailLoading) fetchThemeSong();
     });
     connect(&m_api, &JellyfinClient::unauthorized, this, [this] { logout(); notify("Your session expired. Sign in again."); });
-    connect(player, &MpvPlayer::error, this, [this](const QString &error) { finishSession(); setError(error); });
-    connect(player, &MpvPlayer::ended, this, [this] { finishSession(); if (signedIn()) home(); });
+    connect(player, &MpvPlayer::error, this, [this](const QString &error) { stopPlayback(); setError(error); });
+    connect(player, &MpvPlayer::ended, this, [this] {
+        if (autoplayNextEpisode()) playNextEpisode();
+        else { stopPlayback(); if (signedIn()) home(); }
+    });
     connect(player, &MpvPlayer::loaded, this, [this] {
         if (m_plan.sessionId.isEmpty()) return;
         m_player->setPaused(m_resumePaused);
@@ -457,8 +460,47 @@ void AppController::play(const QVariantMap &item, bool resume, const QVariantMap
     if (!signedIn() || m_negotiating || item.value("folder").toBool() || item.value("id").toString().isEmpty()) return;
     m_playbackOptions = options;
     m_segments.clear(); m_serverSegments.clear();
+    resetNextEpisode();
     beginPlay(item, resume ? qint64(item.value("positionTicks").toDouble()) : 0);
     fetchPlaybackMarkers();
+    fetchNextEpisode();
+}
+void AppController::resetNextEpisode() {
+    ++m_nextEpisodeGeneration;
+    m_nextEpisode.clear(); m_nextEpisodeCancelled = false;
+    emit nextEpisodeChanged();
+}
+void AppController::fetchNextEpisode() {
+    const auto itemId = m_currentItem.value("id").toString();
+    const auto seriesId = m_currentItem.value("seriesId").toString();
+    if (m_currentItem.value("type") != "Episode" || seriesId.isEmpty()) return;
+    const int generation = m_nextEpisodeGeneration;
+    m_api.get("Shows/" + seriesId + "/Episodes",
+        query({{"UserId", m_userId}, {"StartItemId", itemId}, {"Limit", "2"}, {"Fields", fields}, {"IsMissing", "false"}}),
+        [this, generation, itemId, seriesId](const QJsonObject &result, const QString &error) {
+        if (generation != m_nextEpisodeGeneration || !error.isEmpty()) return;
+        const auto episodes = items(result);
+        // StartItemId includes the current episode. Require it before accepting a successor.
+        if (episodes.size() < 2 || episodes[0].toMap().value("id") != itemId) return;
+        const auto next = episodes[1].toMap();
+        if (next.value("type") != "Episode" || next.value("id").toString().isEmpty()
+            || next.value("id") == itemId || next.value("seriesId") != seriesId) return;
+        m_nextEpisode = next;
+        emit nextEpisodeChanged();
+    });
+}
+void AppController::playNextEpisode() {
+    if (!signedIn() || m_negotiating || !autoplayNextEpisode()
+        || (!m_player->active() && m_plan.sessionId.isEmpty())) return;
+    // Source IDs and stream indices belong to the previous file. Carry only its quality choice.
+    const auto next = m_nextEpisode;
+    const QVariantMap options{{"quality", m_playbackOptions.value("quality", 0)}};
+    finishSession();
+    play(next, false, options);
+}
+void AppController::cancelNextEpisode() {
+    m_nextEpisodeCancelled = true;
+    emit nextEpisodeChanged();
 }
 void AppController::fetchPlaybackMarkers() {
     const int generation = ++m_markerGeneration;
@@ -550,7 +592,8 @@ void AppController::finishSession() {
     m_plan = {}; m_reportedStart = false;
 }
 void AppController::stopPlayback() {
-    ++m_playGeneration; ++m_markerGeneration; m_segments.clear(); m_serverSegments.clear(); m_negotiating = false; finishSession(); m_player->stop(); emit changed();
+    ++m_playGeneration; ++m_markerGeneration; m_segments.clear(); m_serverSegments.clear(); m_negotiating = false;
+    resetNextEpisode(); finishSession(); m_player->stop(); emit changed();
 }
 void AppController::seekRelative(double seconds) {
     if (!m_player->active() || m_negotiating) return;

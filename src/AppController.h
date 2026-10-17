@@ -26,6 +26,8 @@ class AppController : public QObject {
     Q_PROPERTY(QVariantMap currentSource READ currentSource NOTIFY changed)
     Q_PROPERTY(QVariantMap playbackOptions READ playbackOptions NOTIFY changed)
     Q_PROPERTY(QVariantList mediaSegments READ mediaSegments NOTIFY changed)
+    Q_PROPERTY(QVariantMap nextEpisode READ nextEpisode NOTIFY nextEpisodeChanged)
+    Q_PROPERTY(bool autoplayNextEpisode READ autoplayNextEpisode NOTIFY nextEpisodeChanged)
     Q_PROPERTY(bool hasMore READ hasMore NOTIFY changed)
     Q_PROPERTY(bool canGoBack READ canGoBack NOTIFY changed)
     Q_PROPERTY(QVariantMap detail READ detail NOTIFY detailsChanged)
@@ -54,6 +56,8 @@ public:
     QVariantMap currentSource() const;
     QVariantMap playbackOptions() const { return m_playbackOptions; }
     QVariantList mediaSegments() const { return m_segments; }
+    QVariantMap nextEpisode() const { return m_nextEpisode; }
+    bool autoplayNextEpisode() const { return !m_nextEpisodeCancelled && !m_nextEpisode.isEmpty(); }
     bool hasMore() const { return m_loaded < m_total; }
     bool canGoBack() const { return !m_history.isEmpty(); }
     QVariantMap detail() const { return m_detail; }
@@ -83,6 +87,8 @@ public:
     Q_INVOKABLE void setQuality(int bitrate);
     Q_INVOKABLE void setPlaybackTrack(bool subtitle, int index);
     Q_INVOKABLE void skipSegment();
+    Q_INVOKABLE void playNextEpisode();
+    Q_INVOKABLE void cancelNextEpisode();
     Q_INVOKABLE void stopPlayback();
     Q_INVOKABLE void seekRelative(double seconds);
     Q_INVOKABLE QVariantMap trickplayFrame(double seconds) const;
@@ -94,6 +100,7 @@ signals:
     void librariesChanged();
     void browsingReady();
     void detailsChanged();
+    void nextEpisodeChanged();
 private:
     QVariantMap normalize(const QJsonObject &item) const;
     QVariantList items(const QJsonObject &response) const;
@@ -101,6 +108,8 @@ private:
     void beginPlay(const QVariantMap &item, qint64 startTicks, bool paused = false);
     void fetchPlaybackMarkers();
     void refreshSegments();
+    void fetchNextEpisode();
+    void resetNextEpisode();
     void report(const QString &event);
     void finishSession();
     void setError(const QString &error);
@@ -131,6 +140,9 @@ private:
     QVariantMap m_playbackOptions;
     QVariantList m_segments, m_serverSegments;
     int m_markerGeneration = 0;
+    QVariantMap m_nextEpisode;
+    int m_nextEpisodeGeneration = 0;
+    bool m_nextEpisodeCancelled = false;
     bool m_resumePaused = false;
     Playback::Plan m_plan;
     QTimer m_progress;
