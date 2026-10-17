@@ -26,11 +26,12 @@ published from this repository yet. The first preview targets version **0.1.0**.
 - Desktop application ID is `moe.ckl.sofafin`.
 - Application and Jellyfin protocol versions are generated from CMake's project version.
 - Installation includes user/developer guides, release notes, and license notices.
+- Documented full application testing in gamescope running on CachyOS Deckify.
 
 ### Known limitations
 
-- Physical Steam Deck/Steam keyboard, native GPU/audio/Gamescope behavior, and
-  suspend/resume validation are pending. HDR/passthrough are not certified.
+- Hardware and distributions beyond CachyOS Deckify running gamescope require
+  separate validation. HDR/passthrough are not certified.
 - Bundled SteamOS distribution, Quick Connect, persistent queues, Live TV, music
   screens, and playlists are unavailable. Offline downloads are outside current scope.
 - No fixed Jellyfin minimum version has been established; optional server metadata

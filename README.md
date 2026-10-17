@@ -6,9 +6,8 @@ A native, controller-first Jellyfin client for Linux, designed for Steam Deck an
 gamescope. Browse movies and shows, resume watching, and play video through
 embedded libmpv. C++20, Qt 6 Quick, and SDL2; the interface runs without a browser.
 
-**Status: early preview, targeting 0.1.0.** Desktop and headless tests exist;
-physical Steam Deck, Steam keyboard, native GPU rendering, and Gamescope checks
-remain release gates. No Flatpak, AppImage, or bundled binary is provided yet.
+**Status: early preview, targeting 0.1.0.** The app is fully tested in gamescope
+running on CachyOS Deckify. No Flatpak, AppImage, or bundled binary is provided yet.
 See [known limitations](docs/README.md#support-and-limitations) before installing.
 
 ## Features

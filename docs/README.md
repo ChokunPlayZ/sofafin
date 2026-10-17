@@ -28,7 +28,8 @@ The current target is Linux movie and TV playback with Qt Quick and OpenGL.
 The application identifies itself as `Sofafin`, its executable is `sofafin`, and
 its desktop ID is `moe.ckl.sofafin`. Older source history uses `JF-Gamescope`.
 
-- Steam Deck and gamescope are intended targets, but physical validation is pending.
+- The app is fully tested in gamescope running on CachyOS Deckify. Other hardware
+  and distributions require separate validation.
 - Headless software rendering validates the UI and decoding; it does not validate
   the application's native OpenGL video surface or audio output.
 - Qt 6.5 is the declared minimum. CI uses Debian 13's packaged Qt; it does not

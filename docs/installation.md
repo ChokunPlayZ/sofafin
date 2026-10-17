@@ -120,8 +120,9 @@ On a system where Sofafin and its runtime dependencies are available:
 4. If Qt chooses an unusable display platform, try `QT_QPA_PLATFORM=xcb %command% --fullscreen`
    in Steam launch options. XWayland/xcb must be available.
 
-Actual overlay, gamepad, GPU, audio, and suspend behavior need the
-[hardware checks](testing.md#hardware-release-checks).
+The app is fully tested in gamescope running on CachyOS Deckify. Use the
+[hardware checks](testing.md#hardware-release-checks) to validate overlay, gamepad,
+GPU, audio, and suspend behavior on other systems.
 
 For nested gamescope on a desktop with gamescope installed:
 

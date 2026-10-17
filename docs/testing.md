@@ -1,5 +1,11 @@
 # Testing
 
+## Tested environment
+
+The app is fully tested in gamescope running on CachyOS Deckify. Other hardware
+and distributions require separate validation using the
+[hardware release checks](#hardware-release-checks).
+
 ## Local automated checks
 
 Install the [full dependency set](installation.md#dependencies), then:

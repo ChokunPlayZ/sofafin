@@ -2,7 +2,7 @@
 
 ## Movie and TV follow-ups
 
-- Validate Steam keyboard overlay, Gamescope, OpenGL, and hardware decoding on a physical Steam Deck.
+- Extend hardware validation beyond CachyOS Deckify gamescope to SteamOS on a physical Steam Deck.
 - Persistent playback queues.
 - Quick Connect and bundled distribution.
 
