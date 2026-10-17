@@ -62,7 +62,7 @@ The interface scales automatically for the display resolution. **Settings → UI
 - Artwork chosen by image role and owner, landscape episode cards, and lazy loading with the server’s matching BlurHash as the placeholder.
 - Scrollable detail pages with controller focus scrolling, including long titles at 800×500.
 - Direct play over authenticated HTTP and Jellyfin-negotiated HLS transcoding, selected using a libmpv device profile.
-- Resume, pause, seeking, buffer progress, estimated ending time, and series/episode information.
+- Resume, pause, seeking, buffer progress with download speed, estimated ending time, and series/episode information.
 - Quality, audio, subtitle, and media-version selection before playback; quality and track changes during playback preserve position and pause state.
 - Media details for the source container, bitrate, size, codecs, resolution, and tracks.
 - Intro, credits, recap, preview, and commercial skip buttons from Jellyfin’s Media Segment API when the server supplies segments.
@@ -70,6 +70,8 @@ The interface scales automatically for the display resolution. **Settings → UI
 - Automatic / direct-only / forced-transcoding modes, bitrate limits, hardware decoding, fullscreen, UI scale, and accent colors.
 
 Direct play is preferred across the media versions Jellyfin returns. Direct-only mode shows an error if none is playable. Automatic mode permits server transcoding; forced-transcoding mode disables video/audio stream copying. Transcoded seeking requests a fresh stream at the target position so playback progress remains on the source timeline. Global playback settings apply to the next stream. Player quality and track selections apply immediately. Automatic uses the global playback mode and bitrate limit, Original requires direct play, and a specific bitrate requests transcoding.
+
+Video playback continuously prefetches up to an hour ahead, limited to 1 GiB of forward cache plus 256 MiB for cached backward seeks. Memory is used as data arrives. Startup, seeks, and underruns target five seconds of buffered media before resuming, or less when the cache fills or the stream ends. The buffering indicator appears immediately when a seek is committed and stays until playback is ready; network streams also show the current download speed when available. Exiting playback resets the timeline and track labels, and a new title opens on black until its first frame is ready.
 
 On Linux, hardware decoding tries VA-API and NVDEC, with software fallback when neither is available. Vulkan decoding is excluded: mpv's automatic probing can abort inside Steam/Gamescope's injected Vulkan WSI layer at playback startup. Older mpv versions that only accept one decoder use `vaapi-copy` with software fallback. The application does not change Steam's overlay or global graphics settings.
 

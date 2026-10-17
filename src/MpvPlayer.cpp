@@ -15,6 +15,14 @@ MpvPlayer::MpvPlayer(QObject *parent, bool audioOnly) : QObject(parent), m_core(
         mpv_set_option_string(h, "vid", "no");
         mpv_set_option_string(h, "loop-file", "inf");
         m_ready = true;
+    } else {
+        // Keep downloading continuously, with room for large UHD streams and
+        // cached backward seeks. These are ceilings, not upfront allocations.
+        for (const auto &[key, value] : {std::pair{"cache", "yes"}, {"cache-secs", "3600"},
+             {"demuxer-max-bytes", "1GiB"}, {"demuxer-max-back-bytes", "256MiB"},
+             {"demuxer-hysteresis-secs", "0"}, {"cache-pause", "yes"},
+             {"cache-pause-initial", "yes"}, {"cache-pause-wait", "5"}})
+            mpv_set_option_string(h, key, value);
     }
     if (mpv_initialize(h) < 0) throw std::runtime_error("Could not initialize libmpv.");
     mpv_observe_property(h, 0, "time-pos", MPV_FORMAT_DOUBLE);
@@ -23,6 +31,7 @@ MpvPlayer::MpvPlayer(QObject *parent, bool audioOnly) : QObject(parent), m_core(
     mpv_observe_property(h, 0, "paused-for-cache", MPV_FORMAT_FLAG);
     mpv_observe_property(h, 0, "demuxer-cache-time", MPV_FORMAT_DOUBLE);
     mpv_observe_property(h, 0, "cache-buffering-state", MPV_FORMAT_INT64);
+    mpv_observe_property(h, 0, "cache-speed", MPV_FORMAT_INT64);
     mpv_observe_property(h, 0, "track-list", MPV_FORMAT_NODE);
     mpv_observe_property(h, 0, "aid", MPV_FORMAT_NONE);
     mpv_observe_property(h, 0, "sid", MPV_FORMAT_NONE);
@@ -32,18 +41,20 @@ MpvPlayer::MpvPlayer(QObject *parent, bool audioOnly) : QObject(parent), m_core(
     }, this);
 }
 MpvPlayer::~MpvPlayer() { mpv_set_wakeup_callback(m_core->handle, nullptr, nullptr); }
-void MpvPlayer::command(std::initializer_list<QByteArray> args) {
+int MpvPlayer::command(std::initializer_list<QByteArray> args, quint64 request) {
     std::vector<const char *> ptrs;
     for (const auto &s : args) ptrs.push_back(s.constData());
     ptrs.push_back(nullptr);
-    mpv_command_async(m_core->handle, 0, ptrs.data());
+    return mpv_command_async(m_core->handle, request, ptrs.data());
 }
 void MpvPlayer::load(const QUrl &url, double start, double offset, double duration, bool hwdec) {
     ++m_trackGeneration; m_audioIds.clear(); m_subtitleIds.clear();
     m_pendingAudio = m_pendingSubtitle = -3; m_audio = "Auto"; m_subtitle = "Off";
     m_pendingUrl = url; m_start = start; m_offset = offset;
-    m_position = start; m_duration = duration; m_active = true; m_loading = true; m_paused = false;
-    m_fileLoading = true; m_cacheLoading = false; m_buffered = 0; m_bufferPercent = 0;
+    m_position = start; m_duration = duration; m_active = true; m_paused = false; m_hasFrame = false;
+    m_fileLoading = m_seekLoading = true; m_cacheLoading = false; m_pendingSeek = 0;
+    m_buffered = 0; m_bufferPercent = 0; m_networkSpeed = -1;
+    m_networkStream = url.scheme() == "http" || url.scheme() == "https";
 #ifdef Q_OS_LINUX
     // auto/auto-safe can probe FFmpeg's Vulkan decoder, whose device creation
     // aborts inside Gamescope's injected WSI layer. Our renderer uses OpenGL.
@@ -73,8 +84,10 @@ void MpvPlayer::rendererReady() { m_ready = true; loadPending(); }
 void MpvPlayer::rendererFailed() { m_ready = false; stop(); emit error("Could not initialize the OpenGL video renderer."); }
 void MpvPlayer::stop() {
     ++m_trackGeneration; m_audioIds.clear(); m_subtitleIds.clear(); m_pendingAudio = m_pendingSubtitle = -3;
-    m_pendingUrl = QUrl(); m_active = false; m_loading = false;
-    m_fileLoading = m_cacheLoading = m_paused = false; m_buffered = 0; m_bufferPercent = 0;
+    m_pendingUrl = QUrl(); m_active = m_hasFrame = false; m_pendingSeek = 0;
+    m_fileLoading = m_cacheLoading = m_seekLoading = m_paused = false;
+    m_start = m_position = m_offset = m_duration = 0; m_audio = "Auto"; m_subtitle = "Off";
+    m_buffered = 0; m_bufferPercent = 0; m_networkSpeed = -1;
     command({"stop"}); emit changed();
 }
 void MpvPlayer::togglePause() { command({"cycle", "pause"}); }
@@ -87,7 +100,15 @@ void MpvPlayer::setPaused(bool paused) {
         m_paused = paused; emit changed();
     }
 }
-void MpvPlayer::seek(double seconds) { command({"seek", QByteArray::number(qMax(0.0, seconds - m_offset), 'f', 3), "absolute+exact"}); }
+void MpvPlayer::seek(double seconds) {
+    if (!m_active) return;
+    // Show feedback before mpv starts the network seek or decoder catch-up.
+    m_seekLoading = true; m_bufferPercent = 0; m_pendingSeek = ++m_seekGeneration;
+    if (command({"seek", QByteArray::number(qMax(0.0, seconds - m_offset), 'f', 3), "absolute+exact"}, m_pendingSeek) < 0) {
+        m_pendingSeek = 0; m_seekLoading = false;
+    }
+    emit changed();
+}
 void MpvPlayer::cycleAudio() { command({"cycle", "aid"}); }
 void MpvPlayer::cycleSubtitle() { command({"cycle", "sid"}); }
 void MpvPlayer::addSubtitle(const QUrl &url, bool select) { command({"sub-add", url.toEncoded(), select ? "select" : "auto"}); }
@@ -143,8 +164,19 @@ void MpvPlayer::drainEvents() {
         auto *event = mpv_wait_event(m_core->handle, 0);
         if (event->event_id == MPV_EVENT_NONE) break;
         if (event->event_id == MPV_EVENT_FILE_LOADED) {
-            m_fileLoading = false; m_loading = m_cacheLoading; emit loaded();
+            m_fileLoading = false; emit loaded();
             mpv_get_property_async(m_core->handle, m_trackGeneration, "track-list", MPV_FORMAT_NODE);
+        }
+        if (event->event_id == MPV_EVENT_COMMAND_REPLY && m_pendingSeek && event->reply_userdata == m_pendingSeek) {
+            m_pendingSeek = 0;
+            if (event->error < 0) m_seekLoading = false;
+        }
+        if (event->event_id == MPV_EVENT_SEEK && m_active) {
+            m_seekLoading = true; m_bufferPercent = 0;
+        }
+        if (event->event_id == MPV_EVENT_PLAYBACK_RESTART && !m_pendingSeek) {
+            m_seekLoading = false;
+            if (m_active && !m_fileLoading) m_hasFrame = true;
         }
         if (event->event_id == MPV_EVENT_GET_PROPERTY_REPLY && event->reply_userdata == m_trackGeneration && event->error >= 0) {
             const auto *p = static_cast<mpv_event_property *>(event->data);
@@ -153,17 +185,20 @@ void MpvPlayer::drainEvents() {
         if (event->event_id == MPV_EVENT_PROPERTY_CHANGE) {
             const auto *p = static_cast<mpv_event_property *>(event->data);
             const QByteArray name(p->name);
-            if (p->data && p->format == MPV_FORMAT_DOUBLE) {
+            if (m_active && p->data && p->format == MPV_FORMAT_DOUBLE) {
                 if (name == "time-pos") m_position = *static_cast<double *>(p->data);
                 if (name == "duration" && m_offset == 0) m_duration = *static_cast<double *>(p->data);
                 if (name == "demuxer-cache-time") m_buffered = *static_cast<double *>(p->data);
             }
-            if (name == "demuxer-cache-time" && !p->data) m_buffered = 0;
-            if (name == "cache-buffering-state" && p->data && p->format == MPV_FORMAT_INT64)
+            if (name == "demuxer-cache-time" && (!m_active || !p->data)) m_buffered = 0;
+            if (m_active && name == "cache-buffering-state" && p->data && p->format == MPV_FORMAT_INT64)
                 m_bufferPercent = qBound(0, int(*static_cast<int64_t *>(p->data)), 100);
+            if (name == "cache-speed")
+                m_networkSpeed = m_active && p->data && p->format == MPV_FORMAT_INT64
+                    ? qMax(int64_t(-1), *static_cast<int64_t *>(p->data)) : -1;
             if (p->data && p->format == MPV_FORMAT_FLAG) {
-                if (name == "pause") m_paused = *static_cast<int *>(p->data);
-                if (name == "paused-for-cache") { m_cacheLoading = *static_cast<int *>(p->data); m_loading = m_active && (m_fileLoading || m_cacheLoading); }
+                if (name == "pause") m_paused = m_active && *static_cast<int *>(p->data);
+                if (name == "paused-for-cache") m_cacheLoading = m_active && *static_cast<int *>(p->data);
             }
             if (name == "track-list" && p->data && p->format == MPV_FORMAT_NODE) updateTracks(*static_cast<mpv_node *>(p->data));
             if (name == "aid" || name == "sid") mpv_get_property_async(m_core->handle, m_trackGeneration, "track-list", MPV_FORMAT_NODE);
@@ -171,7 +206,8 @@ void MpvPlayer::drainEvents() {
         if (event->event_id == MPV_EVENT_END_FILE) {
             const auto *end = static_cast<mpv_event_end_file *>(event->data);
             if (end->reason == MPV_END_FILE_REASON_EOF || end->reason == MPV_END_FILE_REASON_ERROR) {
-                m_active = false; m_loading = false; emit ended();
+                m_active = m_hasFrame = false; m_fileLoading = m_cacheLoading = m_seekLoading = false;
+                m_pendingSeek = 0; m_networkSpeed = -1; emit ended();
                 if (end->reason == MPV_END_FILE_REASON_ERROR) emit error("mpv could not play this stream. Check the connection or try transcoding in Settings.");
             }
         }

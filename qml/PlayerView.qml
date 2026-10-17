@@ -41,6 +41,11 @@ FocusScope {
         return (s >= 3600 ? Math.floor(s / 3600) + ":" + (minutes < 10 ? "0" : "") : "")
             + (s >= 3600 ? minutes : Math.floor(s / 60)) + ":" + (s % 60 < 10 ? "0" : "") + s % 60
     }
+    function transferRate(bytesPerSecond) {
+        if (bytesPerSecond >= 1000000) return (bytesPerSecond / 1000000).toFixed(1) + " MB/s"
+        if (bytesPerSecond >= 1000) return (bytesPerSecond / 1000).toFixed(0) + " kB/s"
+        return Math.max(0, bytesPerSecond).toFixed(0) + " B/s"
+    }
     function activity() {
         pauseScreenVisible = false; controlsVisible = true; hideControls.restart()
         if (isPaused) pauseDelay.restart()
@@ -89,6 +94,13 @@ FocusScope {
         scale: 1 / uiFactor; transformOrigin: Item.TopLeft
         player: Player; visible: Player.active
     }
+    // Qt retains the framebuffer while hidden. Cover it until the new file
+    // has produced its first frame, including a stop/start within one UI tick.
+    Rectangle {
+        objectName: "videoBlank"
+        anchors.fill: parent; color: "black"
+        visible: !Player.hasFrame || App.playbackPending
+    }
     MouseArea {
         anchors.fill: parent; hoverEnabled: true
         onPositionChanged: playback.activity()
@@ -99,7 +111,14 @@ FocusScope {
         anchors.centerIn: parent; spacing: 8
         visible: (Player.loading || App.playbackPending) && !playback.pauseScreenVisible
         BusyIndicator { anchors.horizontalCenter: parent.horizontalCenter; running: parent.visible; width: 64; height: 64 }
-        Text { anchors.horizontalCenter: parent.horizontalCenter; text: App.playbackPending ? "Preparing…" : "Buffering" + (Player.bufferPercent > 0 ? " " + Player.bufferPercent + "%" : ""); color: "white"; font.pixelSize: 16 }
+        Text {
+            objectName: "bufferStatus"
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: App.playbackPending ? "Preparing…" : "Buffering"
+                + (Player.bufferPercent > 0 ? " " + Player.bufferPercent + "%" : "")
+                + (Player.networkSpeed >= 0 ? " · " + playback.transferRate(Player.networkSpeed) : "")
+            color: "white"; font.pixelSize: 16
+        }
     }
     Rectangle {
         id: pauseScreen
