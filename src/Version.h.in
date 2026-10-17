@@ -1,0 +1,4 @@
+#pragma once
+
+// CMakeLists.txt is the single source of the application and protocol version.
+#define SOFAFIN_VERSION "@PROJECT_VERSION@"

@@ -2,6 +2,7 @@
 #include "ControllerInput.h"
 #include "MpvVideo.h"
 #include "BlurHash.h"
+#include "Version.h"
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -16,13 +17,13 @@
 int main(int argc, char *argv[]) {
     QGuiApplication::setApplicationName("Sofafin");
     QGuiApplication::setOrganizationName("Sofafin");
-    QGuiApplication::setApplicationVersion("0.1.0");
+    QGuiApplication::setApplicationVersion(SOFAFIN_VERSION);
     // libmpv's OpenGL renderer shares the native Qt scene graph context.
     if (qEnvironmentVariable("QT_QUICK_BACKEND") != "software") QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
     QQuickStyle::setStyle("Basic");
     QGuiApplication app(argc, argv);
     QGuiApplication::setApplicationDisplayName("Sofafin");
-    QGuiApplication::setDesktopFileName("io.github.sofafin");
+    QGuiApplication::setDesktopFileName("moe.ckl.sofafin");
     QGuiApplication::setWindowIcon(QIcon(":/assets/logo.svg"));
     QCommandLineParser args;
     args.setApplicationDescription("Native, controller-first Jellyfin client for Steam Deck and gamescope.");

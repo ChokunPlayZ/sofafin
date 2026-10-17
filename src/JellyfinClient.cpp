@@ -1,5 +1,6 @@
 #include "JellyfinClient.h"
 #include "Playback.h"
+#include "Version.h"
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QNetworkReply>
@@ -8,7 +9,7 @@ JellyfinClient::JellyfinClient(QString deviceId, QObject *parent, QNetworkAccess
     : QObject(parent), m_network(transport ? transport : new QNetworkAccessManager(this)), m_deviceId(std::move(deviceId)) {}
 void JellyfinClient::configure(const QUrl &server, const QString &token) { m_server = server; m_token = token; ++m_generation; }
 QByteArray JellyfinClient::authorization() const {
-    auto result = QByteArray("MediaBrowser Client=\"Sofafin\", Device=\"Steam Deck\", DeviceId=\"") + m_deviceId.toUtf8() + "\", Version=\"0.1.0\"";
+    auto result = QByteArray("MediaBrowser Client=\"Sofafin\", Device=\"Steam Deck\", DeviceId=\"") + m_deviceId.toUtf8() + "\", Version=\"" + SOFAFIN_VERSION + '"';
     if (!m_token.isEmpty()) result += ", Token=\"" + m_token.toUtf8() + '"';
     return result;
 }

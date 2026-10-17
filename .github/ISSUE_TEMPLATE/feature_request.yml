@@ -1,0 +1,24 @@
+name: Feature request
+description: Describe a user problem and proposed improvement
+body:
+  - type: markdown
+    attributes:
+      value: Check BACKLOG.md and the documented support boundaries before proposing a large feature.
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: Explain what you are trying to do and what gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed behavior
+      description: Include controller/keyboard interaction where relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and context
