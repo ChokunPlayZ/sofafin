@@ -19,6 +19,7 @@
 #include <QDataStream>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QRegularExpression>
 #include <mpv/render.h>
 
 class NativeTests : public QObject {
@@ -923,6 +924,7 @@ private slots:
         m_player->load(QUrl::fromLocalFile(clip), 0, 0, 3, false);
         QTRY_COMPARE_WITH_TIMEOUT(loaded.size(), 1, 5000);
         QTRY_VERIFY_WITH_TIMEOUT(frames > 2 && m_player->position() > 0.2, 5000);
+        QVERIFY(m_player->hasFrame());
         QVERIFY(std::any_of(pixels.begin(), pixels.end(), [](char p) { return static_cast<unsigned char>(p) > 50; }));
         m_player->togglePause(); QTRY_VERIFY(m_player->paused());
         m_player->selectStream(2, false);
@@ -935,12 +937,108 @@ private slots:
         QTRY_VERIFY(m_player->subtitleTrack() != "Off");
         m_player->selectStream(-1, true); QTRY_COMPARE(m_player->subtitleTrack(), "Off");
         QVERIFY(m_player->bufferedPosition() >= m_player->position());
-        m_player->seek(1.2); QTRY_VERIFY(m_player->position() >= 1.1);
-        m_player->stop(); QVERIFY(!m_player->active());
+        QTRY_VERIFY(!m_player->loading());
+        m_player->seek(1.2); QVERIFY(m_player->loading());
+        QTRY_VERIFY(m_player->position() >= 1.1 && !m_player->loading());
+        QVERIFY(m_player->paused());
+        m_player->seek(0.4); m_player->seek(1.6); m_player->seek(0.8);
+        QTRY_VERIFY(!m_player->loading() && qAbs(m_player->position() - 0.8) < 0.15);
+        QVERIFY(m_player->paused());
+        m_player->stop(); QVERIFY(!m_player->active()); QVERIFY(!m_player->hasFrame());
+        QCOMPARE(m_player->position(), 0.0); QCOMPARE(m_player->duration(), 0.0);
         m_player->load(QUrl::fromLocalFile(clip), 1.0, 0, 3, false);
+        QVERIFY(!m_player->hasFrame());
         QTRY_COMPARE_WITH_TIMEOUT(loaded.size(), 2, 5000);
-        QTRY_VERIFY(m_player->position() >= 0.9);
+        QTRY_VERIFY(m_player->position() >= 0.9 && m_player->hasFrame());
         m_player->stop(); renderTimer.stop();
+    }
+    void bufferingShowsNetworkSpeedWithoutBlockingUi() {
+        QTcpServer server;
+        if (!server.listen(QHostAddress::LocalHost)) QSKIP("Loopback sockets are unavailable.");
+        // A seekable 60-second PCM stream delivered at twice playback speed.
+        QByteArray wav; QDataStream stream(&wav, QIODevice::WriteOnly); stream.setByteOrder(QDataStream::LittleEndian);
+        constexpr int dataSize = 60 * 16000;
+        stream.writeRawData("RIFF", 4); stream << quint32(dataSize + 36); stream.writeRawData("WAVEfmt ", 8);
+        stream << quint32(16) << quint16(1) << quint16(1) << quint32(8000) << quint32(16000) << quint16(2) << quint16(16);
+        stream.writeRawData("data", 4); stream << quint32(dataSize); wav.append(QByteArray(dataSize, '\0'));
+        bool stalled = false;
+        int chunkSize = 1600, requests = 0;
+        connect(&server, &QTcpServer::newConnection, &server, [&] {
+            while (server.hasPendingConnections()) {
+                auto *socket = server.nextPendingConnection();
+                connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+                connect(socket, &QTcpSocket::readyRead, &server, [&, socket] {
+                    const auto request = socket->property("request").toByteArray() + socket->readAll();
+                    socket->setProperty("request", request);
+                    if (!request.contains("\r\n\r\n") || socket->property("sent").toBool()) return;
+                    socket->setProperty("sent", true); ++requests;
+                    const auto range = QRegularExpression("\\r\\nRange: bytes=(\\d+)-", QRegularExpression::CaseInsensitiveOption)
+                        .match(QString::fromLatin1(request));
+                    int offset = range.hasMatch() ? range.captured(1).toInt() : 0;
+                    const auto length = wav.size();
+                    QByteArray headers = range.hasMatch() ? "HTTP/1.1 206 Partial Content\r\n" : "HTTP/1.1 200 OK\r\n";
+                    if (range.hasMatch()) headers += "Content-Range: bytes " + QByteArray::number(offset) + "-"
+                        + QByteArray::number(length - 1) + "/" + QByteArray::number(length) + "\r\n";
+                    socket->write(headers + "Content-Type: audio/wav\r\nAccept-Ranges: bytes\r\nContent-Length: "
+                        + QByteArray::number(length - offset) + "\r\nConnection: close\r\n\r\n");
+                    auto *sender = new QTimer(socket);
+                    connect(sender, &QTimer::timeout, socket, [&, socket, sender, offset]() mutable {
+                        if (stalled) return;
+                        const auto chunk = wav.mid(offset, chunkSize);
+                        socket->write(chunk); offset += chunk.size();
+                        if (offset >= wav.size()) { sender->stop(); socket->disconnectFromHost(); }
+                    });
+                    sender->start(50);
+                });
+            }
+        });
+        // Null output decodes the stream while Qt Quick uses its headless backend.
+        QCOMPARE(mpv_set_property_string(m_player->core()->handle, "options/vo", "null"), 0);
+        QCOMPARE(mpv_set_property_string(m_player->core()->handle, "options/ao", "null"), 0);
+        m_player->rendererReady();
+        m_player->load(QUrl(QString("http://127.0.0.1:%1/clip.wav").arg(server.serverPort())), 0, 0, 60, false);
+        QVERIFY(m_player->loading());
+        QVERIFY(object("videoBlank")->property("visible").toBool());
+        QTRY_VERIFY_WITH_TIMEOUT(m_player->networkSpeed() > 0 && m_player->loading(), 5000);
+        QVERIFY(object("bufferIndicator")->property("visible").toBool());
+        QVERIFY(object("bufferStatus")->property("text").toString().contains("B/s"));
+        QTRY_VERIFY_WITH_TIMEOUT(!m_player->loading(), 8000);
+        QVERIFY(!object("videoBlank")->property("visible").toBool());
+        m_player->setPaused(true);
+        stalled = true;
+        const int requestsBefore = requests;
+        int ticks = 0; QTimer uiTimer;
+        connect(&uiTimer, &QTimer::timeout, this, [&] { ++ticks; }); uiTimer.start(20);
+        m_player->seek(45);
+        QVERIFY(m_player->loading());
+        QVERIFY(object("bufferIndicator")->property("visible").toBool());
+        QTest::qWait(300);
+        QVERIFY(ticks >= 5); QVERIFY(m_player->loading());
+        // Removing the throttle lets prefetch run all the way to EOF while paused.
+        stalled = false; chunkSize = 65536;
+        QTRY_VERIFY_WITH_TIMEOUT(!m_player->loading() && qAbs(m_player->position() - 45) < 0.3, 5000);
+        QVERIFY(requests > requestsBefore); QVERIFY(m_player->paused());
+        QTRY_VERIFY_WITH_TIMEOUT(m_player->bufferedPosition() >= 59, 5000);
+        QVERIFY(!object("bufferIndicator")->property("visible").toBool());
+        const int cachedRequests = requests;
+        m_player->seek(47);
+        QVERIFY(m_player->loading());
+        QTRY_VERIFY_WITH_TIMEOUT(!m_player->loading() && qAbs(m_player->position() - 47) < 0.3, 3000);
+        m_player->seek(46);
+        QTRY_VERIFY_WITH_TIMEOUT(!m_player->loading() && qAbs(m_player->position() - 46) < 0.3, 3000);
+        QCOMPARE(requests, cachedRequests);
+        m_player->stop();
+        QVERIFY(!m_player->loading()); QCOMPARE(m_player->networkSpeed(), -1.0);
+        QVERIFY(!m_player->hasFrame());
+        stalled = true;
+        m_player->load(QUrl(QString("http://127.0.0.1:%1/next.wav").arg(server.serverPort())), 0, 0, 60, false);
+        QVERIFY(!m_player->hasFrame()); QVERIFY(object("videoBlank")->property("visible").toBool());
+        QTest::qWait(100);
+        QVERIFY(object("videoBlank")->property("visible").toBool());
+        stalled = false; chunkSize = 65536;
+        QTRY_VERIFY_WITH_TIMEOUT(m_player->hasFrame() && !m_player->loading(), 5000);
+        QVERIFY(!object("videoBlank")->property("visible").toBool());
+        m_player->stop();
     }
 };
 
