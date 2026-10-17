@@ -75,7 +75,7 @@ jobs:
           QT_QPA_PLATFORM=offscreen ./build/sofafin --version
       - name: Save test results
         if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-${{ matrix.build_type }}-test-results
           path: |
@@ -85,7 +85,7 @@ jobs:
           retention-days: 14
       - name: Save source snapshot
         if: matrix.build_type == 'Release'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: source-snapshot
           path: |
