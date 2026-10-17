@@ -33,6 +33,7 @@ FocusScope {
     signal activity()
     signal moveUp()
     signal moveDown()
+    signal backRequested()
     implicitHeight: markerLegend.visible ? 40 + markerLegend.implicitHeight : 36
     activeFocusOnTab: true
     enabled: Player.active && Player.duration > 0 && !App.playbackPending
@@ -81,7 +82,7 @@ FocusScope {
         if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { if (seeking) commit(); else begin() }
         else if (event.key === Qt.Key_Left || event.key === Qt.Key_Right) {
             nudgeKey(event.key === Qt.Key_Left ? -1 : 1)
-        } else if (event.key === Qt.Key_Escape) { if (seeking) { cancel(); activity() } else moveUp() }
+        } else if (event.key === Qt.Key_Escape) { if (seeking) { cancel(); activity() } else backRequested() }
         else if (event.key === Qt.Key_Up) { cancel(); moveUp() }
         else if (event.key === Qt.Key_Down) { cancel(); moveDown() }
         else return

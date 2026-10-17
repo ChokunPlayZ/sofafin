@@ -10,8 +10,16 @@ FocusScope {
     property bool controlsVisible: true
     property bool pauseScreenVisible: false
     property bool popupClosing: false
+    property string dismissedSegment: ""
+    property bool nextEpisodeDismissed: false
     readonly property bool isPaused: Player.active && Player.paused
     readonly property var media: App.currentItem
+    readonly property string playbackItemId: media.id || ""
+    onPlaybackItemIdChanged: {
+        dismissedSegment = ""
+        nextEpisodeDismissed = false
+        if (stopPrompt && stopPrompt.visible) { stopPrompt.resumeAfterClose = false; stopPrompt.close() }
+    }
     readonly property string heading: media.seriesName || App.currentTitle
     readonly property string episode: media.type === "Episode"
         ? (media.seasonNumber !== undefined && media.seasonNumber !== null && media.episodeNumber !== undefined && media.episodeNumber !== null
@@ -28,6 +36,11 @@ FocusScope {
     }
     readonly property real nextEpisodeStart: finalSegment.start !== undefined
         ? finalSegment.start : Math.max(0, Player.duration - 30)
+    readonly property string segmentKey: segment.type ? segment.type + ":" + segment.start + ":" + segment.end : ""
+    readonly property bool nextEpisodeAvailable: Player.active && Player.duration > 0 && App.autoplayNextEpisode
+        && !App.playbackPending && Player.position >= nextEpisodeStart
+    readonly property bool skipAvailable: !!segment.type && !App.playbackPending && !nextEpisodeAvailable
+        && !(App.nextEpisode.id && segment.start === finalSegment.start)
     readonly property int nextEpisodeSeconds: Math.max(0, Math.ceil(Player.duration - Player.position))
     readonly property string nextEpisodeInfo: {
         const next = App.nextEpisode
@@ -42,12 +55,18 @@ FocusScope {
     visible: Player.active || App.playbackPending
     onVisibleChanged: {
         pauseScreenVisible = false
-        if (visible) { controlsVisible = true; focusVideo(); hideControls.restart() }
-        else { pauseDelay.stop(); hideControls.stop() }
+        if (visible) {
+            dismissedSegment = ""; nextEpisodeDismissed = false
+            controlsVisible = true; focusVideo(); hideControls.restart()
+        }
+        else {
+            pauseDelay.stop(); hideControls.stop()
+            stopPrompt.resumeAfterClose = false; stopPrompt.close()
+        }
     }
     onIsPausedChanged: {
         pauseScreenVisible = false
-        if (isPaused) { pauseDelay.restart(); controlsVisible = true }
+        if (isPaused) { pauseDelay.restart(); if (!stopPrompt.visible && !popupClosing) controlsVisible = true }
         else { pauseDelay.stop(); if (visible) hideControls.restart() }
     }
     onActiveFocusChanged: if (activeFocus && isPaused && !pauseScreenVisible) pauseDelay.restart()
@@ -72,9 +91,18 @@ FocusScope {
         playback.forceActiveFocus()
     }
     function hideOverlay() { controlsVisible = false; pauseScreenVisible = false; focusVideo(); if (isPaused) pauseDelay.restart() }
+    function focusPrompt() {
+        activity()
+        if (nextEpisodeAvailable) { nextEpisodeDismissed = false; nextEpisodeNow.forceActiveFocus() }
+        else if (skipAvailable) { dismissedSegment = ""; skipButton.forceActiveFocus() }
+        else hideOverlay()
+    }
     function back() {
-        if (pauseScreenVisible || controlsVisible) hideOverlay()
-        else App.stopPlayback()
+        if (pauseScreenVisible || controlsVisible || skipButton.visible || nextEpisodePanel.visible) {
+            if (segmentKey) dismissedSegment = segmentKey
+            if (nextEpisodeAvailable) nextEpisodeDismissed = true
+            hideOverlay()
+        } else stopPrompt.open()
     }
     function settings(section) {
         activity(); trackPopup.open()
@@ -85,10 +113,19 @@ FocusScope {
         })
     }
     Connections {
+        target: Player
+        function onLoaded() { Qt.callLater(() => {
+            // Apply this after the controller restores the stream's pause state.
+            if (!stopPrompt.visible || !Player.active) return
+            stopPrompt.resumeAfterClose = stopPrompt.resumeAfterClose || !Player.paused
+            Player.setPaused(true)
+        }) }
+    }
+    Connections {
         target: Controller
         function onAxisChanged() {
             if (Controller.horizontalAxis === 0 || !playback.visible || !seekBar.enabled
-                || playback.popupClosing || trackPopup.visible || infoPopup.visible) return
+                || playback.popupClosing || trackPopup.visible || infoPopup.visible || stopPrompt.visible) return
             const window = playback.Window.window
             if (!window || !window.active || window.activeFocusItem !== playback) return
             playback.activity()
@@ -98,7 +135,7 @@ FocusScope {
         }
     }
     Keys.onPressed: event => {
-        if (popupClosing || trackPopup.visible || infoPopup.visible) { event.accepted = true; return }
+        if (popupClosing || trackPopup.visible || infoPopup.visible || stopPrompt.visible) { event.accepted = true; return }
         if (App.playbackPending && event.key !== Qt.Key_Escape) { event.accepted = true; return }
         if (event.key === Qt.Key_Escape) back()
         else if (event.key === Qt.Key_Up) hideOverlay()
@@ -138,8 +175,15 @@ FocusScope {
         visible: !Player.hasFrame || App.playbackPending
     }
     MouseArea {
+        property point lastPosition: Qt.point(-1, -1)
         anchors.fill: parent; hoverEnabled: true
-        onPositionChanged: playback.activity()
+        // Popups generate a hover entry when they close, even with a still pointer.
+        onEntered: lastPosition = Qt.point(mouseX, mouseY)
+        onPositionChanged: mouse => {
+            const moved = mouse.x !== lastPosition.x || mouse.y !== lastPosition.y
+            lastPosition = Qt.point(mouse.x, mouse.y)
+            if (moved) playback.activity()
+        }
         onClicked: { playback.activity(); playback.focusVideo(); Player.togglePause() }
     }
     Column {
@@ -190,7 +234,8 @@ FocusScope {
                 Layout.fillWidth: true
                 accent: playback.accent
                 onActivity: playback.activity()
-                onMoveUp: playback.hideOverlay()
+                onMoveUp: playback.focusPrompt()
+                onBackRequested: playback.back()
                 onMoveDown: pauseButton.forceActiveFocus()
             }
             RowLayout {
@@ -204,7 +249,7 @@ FocusScope {
                 NavButton { id: pauseButton; objectName: "playerPause"; text: Player.paused ? "Resume" : "Pause"; primary: true; accent: playback.accent; implicitWidth: 120; upTarget: seekBar; onClicked: { playback.activity(); Player.togglePause() } }
                 Item { Layout.fillWidth: true }
                 NavButton { objectName: "playerSettings"; text: "Playback settings"; flat: true; upTarget: seekBar; onClicked: playback.settings("quality") }
-                NavButton { text: "Stop"; flat: true; implicitWidth: 90; upTarget: seekBar; onClicked: App.stopPlayback() }
+                NavButton { objectName: "playerStop"; text: "Stop"; flat: true; implicitWidth: 90; upTarget: seekBar; onClicked: stopPrompt.open() }
             }
         }
     }
@@ -212,11 +257,15 @@ FocusScope {
         id: skipButton
         objectName: "skipSegmentButton"
         anchors { right: parent.right; bottom: parent.bottom; margins: 28; bottomMargin: overlay.visible ? overlay.height + 12 : 35 }
-        visible: !!playback.segment.type && !playback.pauseScreenVisible && !seekBar.seeking && !App.playbackPending
-            && !nextEpisodePanel.visible
-            && !(App.nextEpisode.id && playback.segment.start === playback.finalSegment.start)
+        visible: playback.skipAvailable && playback.dismissedSegment !== playback.segmentKey
+            && !playback.pauseScreenVisible && !seekBar.seeking
         text: "Skip " + ({Intro: "intro", Outro: "credits", Recap: "recap", Preview: "preview", Commercial: "commercial"})[playback.segment.type]
-        primary: true; accent: playback.accent
+        implicitHeight: 40; padding: 12; font.pixelSize: 14
+        accent: playback.accent
+        background: Rectangle {
+            radius: 5; color: skipButton.activeFocus || skipButton.hovered ? "#ed203244" : "#a615202d"
+            border.color: skipButton.activeFocus ? "white" : "#665d7285"; border.width: 2
+        }
         upTarget: playback; downTarget: seekBar
         onNavigatedUp: playback.hideOverlay()
         onClicked: { playback.activity(); App.skipSegment(); playback.focusVideo() }
@@ -226,30 +275,29 @@ FocusScope {
         id: nextEpisodePanel
         objectName: "nextEpisodePrompt"
         anchors { right: parent.right; bottom: parent.bottom; margins: 28; bottomMargin: overlay.visible ? overlay.height + 12 : 35 }
-        width: Math.min(440, playback.width - 56)
-        height: nextEpisodeColumn.implicitHeight + 32
-        radius: 8; color: "#ed15202d"; border.color: "#425263"
-        visible: Player.active && Player.duration > 0 && App.autoplayNextEpisode && !App.playbackPending
-            && !seekBar.seeking && Player.position >= playback.nextEpisodeStart
+        width: Math.min(340, playback.width - 56)
+        height: nextEpisodeColumn.implicitHeight + 24
+        radius: 6; color: nextEpisodeNow.activeFocus || nextEpisodeClose.activeFocus ? "#ed15202d" : "#a615202d"; border.color: "#665d7285"
+        visible: playback.nextEpisodeAvailable && !playback.nextEpisodeDismissed
+            && !seekBar.seeking && !playback.pauseScreenVisible
         onVisibleChanged: if (!visible && (nextEpisodeNow.activeFocus || nextEpisodeClose.activeFocus)) playback.focusVideo()
-        Keys.onEscapePressed: { App.cancelNextEpisode(); playback.focusVideo() }
         ColumnLayout {
             id: nextEpisodeColumn
-            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 16 }
-            spacing: 10
+            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 }
+            spacing: 6
             Text {
                 objectName: "nextEpisodeCountdown"
                 Layout.fillWidth: true
                 text: "Next Episode in " + playback.nextEpisodeSeconds + " seconds"
-                color: "white"; font.pixelSize: 20; font.weight: Font.DemiBold
+                color: "white"; font.pixelSize: 16; font.weight: Font.DemiBold
                 wrapMode: Text.Wrap
             }
             Text {
                 objectName: "nextEpisodeInfo"
                 Layout.fillWidth: true
                 text: playback.nextEpisodeInfo
-                color: "#c3cbd4"; font.pixelSize: 16
-                wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight
+                color: "#c3cbd4"; font.pixelSize: 14
+                elide: Text.ElideRight
             }
             RowLayout {
                 Layout.fillWidth: true
@@ -257,7 +305,8 @@ FocusScope {
                 NavButton {
                     id: nextEpisodeNow
                     objectName: "nextEpisodeNow"
-                    text: "Start now"; primary: true; accent: playback.accent
+                    text: "Start now"; primary: activeFocus || hovered; accent: playback.accent
+                    implicitHeight: 40; padding: 12; font.pixelSize: 14
                     Layout.fillWidth: true
                     upTarget: playback; downTarget: seekBar; rightTarget: nextEpisodeClose; leftTarget: nextEpisodeClose
                     onNavigatedUp: playback.hideOverlay()
@@ -267,16 +316,63 @@ FocusScope {
                     id: nextEpisodeClose
                     objectName: "nextEpisodeClose"
                     text: "Close"
+                    implicitHeight: 40; padding: 12; font.pixelSize: 14
                     upTarget: playback; downTarget: seekBar; leftTarget: nextEpisodeNow; rightTarget: nextEpisodeNow
                     onNavigatedUp: playback.hideOverlay()
                     onClicked: { App.cancelNextEpisode(); playback.focusVideo() }
                 }
             }
+            Text { text: "B / Esc · Hide"; color: "#c3cbd4"; font.pixelSize: 12 }
         }
     }
     Timer { id: hideControls; interval: 4000; onTriggered: if (playback.Window.window.activeFocusItem === playback && !trackPopup.visible && !infoPopup.visible && !Player.paused) playback.controlsVisible = false }
     Timer { id: pauseDelay; objectName: "pauseScreenTimer"; interval: 10000; onTriggered: if (playback.isPaused && playback.Window.window.activeFocusItem === playback && !trackPopup.visible && !infoPopup.visible) { playback.controlsVisible = false; playback.pauseScreenVisible = true; playback.focusVideo() } }
     Timer { interval: 1000; repeat: true; running: playback.visible; onTriggered: playback.clockTime = new Date() }
+    Popup {
+        id: stopPrompt
+        objectName: "stopPlaybackPrompt"
+        property bool resumeAfterClose: false
+        parent: Overlay.overlay
+        width: Math.min(440, parent.width - 48); height: stopColumn.implicitHeight + 48
+        x: (parent.width - width) / 2; y: (parent.height - height) / 2
+        modal: true; focus: true; padding: 24; closePolicy: Popup.CloseOnEscape
+        onOpened: {
+            resumeAfterClose = Player.active && !Player.paused
+            if (resumeAfterClose) Player.setPaused(true)
+            keepPlaying.forceActiveFocus()
+        }
+        onAboutToHide: playback.popupClosing = true
+        onClosed: Qt.callLater(() => {
+            if (resumeAfterClose && Player.active) Player.setPaused(false)
+            resumeAfterClose = false
+            if (playback.visible) playback.hideOverlay()
+            playback.popupClosing = false
+        })
+        background: Rectangle { color: "#15202d"; radius: 8; border.color: "#425263" }
+        contentItem: ColumnLayout {
+            id: stopColumn
+            spacing: 16
+            Text { text: "Stop playing?"; color: "white"; font.pixelSize: 24; Layout.fillWidth: true }
+            Text { objectName: "stopPlaybackHint"; text: "Press B / Esc to keep playing"; color: "#c3cbd4"; font.pixelSize: 16; Layout.fillWidth: true; wrapMode: Text.Wrap }
+            RowLayout {
+                Layout.fillWidth: true; spacing: 8
+                NavButton {
+                    id: keepPlaying
+                    objectName: "keepPlaying"
+                    text: "Keep playing"; Layout.fillWidth: true
+                    leftTarget: confirmStop; rightTarget: confirmStop; upTarget: keepPlaying; downTarget: keepPlaying
+                    onClicked: stopPrompt.close()
+                }
+                NavButton {
+                    id: confirmStop
+                    objectName: "confirmStopPlayback"
+                    text: "Stop"; Layout.fillWidth: true; primary: true; accent: playback.accent
+                    leftTarget: keepPlaying; rightTarget: keepPlaying; upTarget: confirmStop; downTarget: confirmStop
+                    onClicked: { stopPrompt.resumeAfterClose = false; stopPrompt.close(); App.stopPlayback() }
+                }
+            }
+        }
+    }
     Popup {
         id: trackPopup
         objectName: "playerTrackPopup"

@@ -41,7 +41,7 @@ public:
     void load(const QUrl &url, double start, double offset, double duration, bool hwdec);
     void addSubtitle(const QUrl &url, bool select = false);
     void selectStream(int index, bool subtitle);
-    void setPaused(bool paused);
+    Q_INVOKABLE void setPaused(bool paused);
     void setVolume(int volume);
     Q_INVOKABLE void stop();
     Q_INVOKABLE void togglePause();

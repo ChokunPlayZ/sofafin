@@ -973,9 +973,45 @@ private slots:
         QVERIFY(button->property("visible").toBool()); QCOMPARE(button->property("text").toString(), label);
         auto *view = object("playbackView"); QVERIFY(QMetaObject::invokeMethod(view, "focusVideo"));
         QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(button->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("playerSeekBar")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Return); QVERIFY(object("playerSeekBar")->property("seeking").toBool());
+        QTest::keyClick(m_window, Qt::Key_Right);
+        QTest::keyClick(m_window, Qt::Key_Up); QTRY_VERIFY(button->property("activeFocus").toBool());
+        QVERIFY(!object("playerSeekBar")->property("seeking").toBool()); QCOMPARE(m_player->position(), 0.0);
+        QTest::keyClick(m_window, Qt::Key_Escape);
+        QVERIFY(!button->property("visible").toBool()); QVERIFY(!object("playerOverlay")->property("visible").toBool());
+        QVERIFY(m_player->active()); QVERIFY(!object("stopPlaybackPrompt")->property("visible").toBool());
+        QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("playerSeekBar")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Up); QTRY_VERIFY(button->property("activeFocus").toBool());
+        const auto screenshot = qEnvironmentVariable("SOFAFIN_SKIP_SCREENSHOT");
+        if (!screenshot.isEmpty() && type == "Intro") QVERIFY(m_window->grabWindow().save(screenshot));
         QTest::keyClick(m_window, Qt::Key_Return);
         QTRY_VERIFY(!m_app->playbackPending()); QCOMPARE(m_player->position(), 30.0);
         QVERIFY(!button->property("visible").toBool()); m_app->stopPlayback();
+    }
+    void skipPromptDismissalResetsForNewSegmentAndReplay() {
+        QVERIFY(signIn());
+        const auto original = m_network->respond;
+        m_network->respond = [original](const FixtureRequest &request) {
+            if (request.request.url().path().contains("MediaSegments/")) return FixtureResponse{R"({"Items":[
+                {"Type":"Intro","StartTicks":0,"EndTicks":300000000},
+                {"Type":"Recap","StartTicks":300000000,"EndTicks":600000000}]})"};
+            return original(request);
+        };
+        const auto item = m_app->shelves().first().toMap()["items"].toList().first().toMap();
+        m_app->play(item, false, {{"quality", 8000000}}); QTRY_VERIFY(m_player->active());
+        auto *button = object("skipSegmentButton"); QTRY_VERIFY(button->property("visible").toBool());
+        QTest::keyClick(m_window, Qt::Key_Escape); QVERIFY(!button->property("visible").toBool());
+        m_app->setQuality(4000000); QTRY_VERIFY(!m_app->playbackPending());
+        QVERIFY(!button->property("visible").toBool());
+        m_app->seekRelative(35); QTRY_VERIFY(!m_app->playbackPending());
+        QTRY_VERIFY(button->property("visible").toBool()); QCOMPARE(button->property("text").toString(), "Skip recap");
+        QVERIFY(QMetaObject::invokeMethod(object("playbackView"), "focusVideo"));
+        QTest::keyClick(m_window, Qt::Key_Escape); QVERIFY(!button->property("visible").toBool());
+        m_app->stopPlayback();
+        m_app->play(item, false, {{"quality", 8000000}}); QTRY_VERIFY(m_player->active());
+        QTRY_VERIFY(button->property("visible").toBool()); QCOMPARE(button->property("text").toString(), "Skip intro");
+        m_app->stopPlayback();
     }
     void skippingFinalCreditsStopsPlayback() {
         QVERIFY(signIn());
@@ -1031,7 +1067,13 @@ private slots:
         QTRY_VERIFY(QRectF(0, 0, m_window->width(), m_window->height()).contains(prompt->mapRectToScene(prompt->boundingRect())));
         QVERIFY(QMetaObject::invokeMethod(object("playbackView"), "hideOverlay"));
         QVERIFY(prompt->isVisible());
+        const auto screenshot = qEnvironmentVariable("SOFAFIN_NEXT_SCREENSHOT");
+        if (!screenshot.isEmpty() && start < 0) QVERIFY(m_window->grabWindow().save(screenshot));
         QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("nextEpisodeNow")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("playerSeekBar")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Return); QVERIFY(object("playerSeekBar")->property("seeking").toBool());
+        QTest::keyClick(m_window, Qt::Key_Up); QTRY_VERIFY(object("nextEpisodeNow")->property("activeFocus").toBool());
+        QVERIFY(!object("playerSeekBar")->property("seeking").toBool());
         QTest::keyClick(m_window, Qt::Key_Up);
         m_player->togglePause(); QTRY_VERIFY(m_player->paused());
         const auto countdown = object("nextEpisodeCountdown")->property("text").toString();
@@ -1078,6 +1120,43 @@ private slots:
             }
         }
         QVERIFY(stopped); QVERIFY(started); m_app->stopPlayback();
+    }
+    void hidingNextEpisodePreservesAutoplay_data() {
+        QTest::addColumn<int>("focus");
+        QTest::newRow("video") << 0;
+        QTest::newRow("start-now") << 1;
+        QTest::newRow("close") << 2;
+        QTest::newRow("timeline") << 3;
+    }
+    void hidingNextEpisodePreservesAutoplay() {
+        QFETCH(int, focus);
+        QVERIFY(signIn()); serveEpisodeSequence();
+        m_app->play(playingEpisode(95), true, {{"quality", 8000000}});
+        QTRY_VERIFY(m_player->active()); QTRY_VERIFY(m_app->autoplayNextEpisode());
+        auto *view = object("playbackView");
+        auto *prompt = object("nextEpisodePrompt"); QVERIFY(prompt->property("visible").toBool());
+        QVERIFY(QMetaObject::invokeMethod(view, "focusVideo"));
+        if (focus > 0) { QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("nextEpisodeNow")->property("activeFocus").toBool()); }
+        if (focus == 2) { QTest::keyClick(m_window, Qt::Key_Right); QTRY_VERIFY(object("nextEpisodeClose")->property("activeFocus").toBool()); }
+        if (focus == 3) { QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("playerSeekBar")->property("activeFocus").toBool()); }
+        QTest::keyClick(m_window, Qt::Key_Escape);
+        QVERIFY(!prompt->property("visible").toBool()); QVERIFY(!object("playerOverlay")->property("visible").toBool());
+        QVERIFY(m_player->active()); QVERIFY(m_app->autoplayNextEpisode());
+        QVERIFY(!object("stopPlaybackPrompt")->property("visible").toBool());
+        QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("playerSeekBar")->property("activeFocus").toBool());
+        QVERIFY(!prompt->property("visible").toBool());
+        QTest::keyClick(m_window, Qt::Key_Up); QTRY_VERIFY(object("nextEpisodeNow")->property("activeFocus").toBool());
+        QVERIFY(prompt->property("visible").toBool());
+        QTest::keyClick(m_window, Qt::Key_Escape); QVERIFY(!prompt->property("visible").toBool());
+        m_app->seekRelative(-50); QTRY_VERIFY(!m_app->playbackPending());
+        m_app->seekRelative(50); QTRY_VERIFY(!m_app->playbackPending());
+        m_app->setQuality(4000000); QTRY_VERIFY(!m_app->playbackPending());
+        QVERIFY(!prompt->property("visible").toBool()); QVERIFY(m_app->autoplayNextEpisode());
+        m_player->ended(); QTRY_COMPARE(m_app->currentItem().value("id").toString(), "episode-2");
+        QTRY_VERIFY(!m_app->playbackPending());
+        m_app->seekRelative(95); QTRY_VERIFY(!m_app->playbackPending()); QTRY_VERIFY(m_app->autoplayNextEpisode());
+        QTRY_VERIFY(prompt->property("visible").toBool()); // Dismissal belongs to the previous episode.
+        m_app->stopPlayback();
     }
     void closingNextEpisodeCancelsUntilEpisodeEnds() {
         QVERIFY(signIn()); serveEpisodeSequence();
@@ -1199,7 +1278,96 @@ private slots:
         QVERIFY(m_player->paused());
         QTest::keyClick(m_window, Qt::Key_Up);
         QTest::keyClick(m_window, Qt::Key_Escape);
+        QTRY_VERIFY(object("stopPlaybackPrompt")->property("visible").toBool());
+        QVERIFY(m_player->active());
+        QTest::keyClick(m_window, Qt::Key_Right); QTRY_VERIFY(object("confirmStopPlayback")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Return);
         QTRY_VERIFY(!m_player->active());
+    }
+    void stopPlaybackRequiresConfirmation_data() {
+        QTest::addColumn<bool>("paused"); QTest::addColumn<bool>("stopButton");
+        QTest::newRow("back-playing") << false << false;
+        QTest::newRow("back-paused") << true << false;
+        QTest::newRow("stop-playing") << false << true;
+        QTest::newRow("stop-paused") << true << true;
+    }
+    void stopPlaybackRequiresConfirmation() {
+        QFETCH(bool, paused); QFETCH(bool, stopButton);
+        QVERIFY(signIn()); m_window->resize(800, 500);
+        const auto item = m_app->shelves().first().toMap()["items"].toList().first().toMap();
+        m_app->play(item, false); QTRY_VERIFY(m_player->active());
+        m_player->setPaused(paused); QTRY_COMPARE(m_player->paused(), paused);
+        if (stopButton) {
+            qobject_cast<QQuickItem *>(object("playerStop"))->forceActiveFocus();
+            QTest::keyClick(m_window, Qt::Key_Return);
+        } else {
+            QVERIFY(QMetaObject::invokeMethod(object("playbackView"), "hideOverlay"));
+            QTest::keyClick(m_window, Qt::Key_Escape);
+        }
+        auto *prompt = object("stopPlaybackPrompt"); QTRY_VERIFY(prompt->property("visible").toBool());
+        QVERIFY(m_player->active()); QTRY_VERIFY(m_player->paused());
+        QTRY_VERIFY(object("keepPlaying")->property("activeFocus").toBool());
+        QVERIFY(object("stopPlaybackHint")->property("text").toString().contains("Press B"));
+        auto *keep = qobject_cast<QQuickItem *>(object("keepPlaying")); QVERIFY(keep);
+        QVERIFY(QRectF(0, 0, m_window->width(), m_window->height()).contains(keep->mapRectToScene(keep->boundingRect())));
+        const auto screenshot = qEnvironmentVariable("SOFAFIN_STOP_SCREENSHOT");
+        if (!screenshot.isEmpty() && !paused && !stopButton) QVERIFY(m_window->grabWindow().save(screenshot));
+        QTest::keyClick(m_window, Qt::Key_Escape);
+        QTRY_VERIFY(!prompt->property("visible").toBool()); QTRY_COMPARE(m_player->paused(), paused);
+        QTRY_VERIFY(!object("playbackView")->property("popupClosing").toBool()); QVERIFY(m_player->active());
+        QTest::qWait(50); QVERIFY(!object("playerOverlay")->property("visible").toBool());
+        QTRY_COMPARE(m_window->activeFocusItem(), qobject_cast<QQuickItem *>(object("playbackView")));
+        QTest::keyClick(m_window, Qt::Key_Escape); QTRY_VERIFY(prompt->property("visible").toBool());
+        QTRY_VERIFY(object("keepPlaying")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Return);
+        QTRY_VERIFY(!prompt->property("visible").toBool()); QTRY_COMPARE(m_player->paused(), paused);
+        QTRY_VERIFY(!object("playbackView")->property("popupClosing").toBool()); QVERIFY(m_player->active());
+        QTest::qWait(50); QVERIFY(!object("playerOverlay")->property("visible").toBool());
+        QTRY_COMPARE(m_window->activeFocusItem(), qobject_cast<QQuickItem *>(object("playbackView")));
+        QTest::keyClick(m_window, Qt::Key_Escape); QTRY_VERIFY(prompt->property("visible").toBool());
+        QTest::keyClick(m_window, Qt::Key_Right); QTRY_VERIFY(object("confirmStopPlayback")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Return);
+        QTRY_VERIFY(!m_player->active()); QVERIFY(!prompt->property("visible").toBool());
+        QVERIFY(!object("playbackView")->property("visible").toBool());
+    }
+    void stopConfirmationPausesStreamThatFinishesLoading() {
+        QVERIFY(signIn());
+        const auto item = m_app->shelves().first().toMap()["items"].toList().first().toMap();
+        m_app->play(item, false); QTRY_VERIFY(m_player->active());
+        QVERIFY(QMetaObject::invokeMethod(object("playbackView"), "hideOverlay"));
+        QTest::keyClick(m_window, Qt::Key_Escape);
+        QTRY_VERIFY(object("stopPlaybackPrompt")->property("visible").toBool());
+        QVERIFY(m_player->paused());
+        m_player->loaded(); // The controller restores the stream's original pause state on load.
+        QTRY_VERIFY(m_player->paused());
+        QTest::keyClick(m_window, Qt::Key_Escape);
+        QTRY_VERIFY(!object("playbackView")->property("popupClosing").toBool());
+        QTRY_VERIFY(!m_player->paused());
+        QTest::qWait(50); QVERIFY(!object("playerOverlay")->property("visible").toBool());
+        QTest::mouseMove(m_window, QPoint(10, 10)); QTest::mouseMove(m_window, QPoint(20, 20), 30);
+        QTRY_VERIFY(object("playerOverlay")->property("visible").toBool());
+        QVERIFY(!object("stopPlaybackPrompt")->property("visible").toBool());
+        m_app->stopPlayback();
+    }
+    void stopConfirmationCancelsPendingPlayback() {
+        QVERIFY(signIn());
+        const auto original = m_network->respond;
+        m_network->respond = [original](const FixtureRequest &request) {
+            auto response = original(request);
+            if (request.request.url().path().endsWith("PlaybackInfo")) response.delay = 300;
+            return response;
+        };
+        const auto item = m_app->shelves().first().toMap()["items"].toList().first().toMap();
+        m_app->play(item, false); QVERIFY(m_app->playbackPending());
+        QTRY_VERIFY(object("playbackView")->property("visible").toBool());
+        QTRY_COMPARE(m_window->activeFocusItem(), qobject_cast<QQuickItem *>(object("playbackView")));
+        QTest::keyClick(m_window, Qt::Key_Escape); QTRY_VERIFY(!object("playerOverlay")->property("visible").toBool());
+        QTest::keyClick(m_window, Qt::Key_Escape);
+        QTRY_VERIFY_WITH_TIMEOUT(object("stopPlaybackPrompt")->property("visible").toBool(), 1000);
+        QTest::keyClick(m_window, Qt::Key_Right); QTest::keyClick(m_window, Qt::Key_Return);
+        QVERIFY(!m_app->playbackPending()); QVERIFY(!m_player->active());
+        QTest::qWait(350); QVERIFY(!m_player->active());
+        QVERIFY(!object("stopPlaybackPrompt")->property("visible").toBool());
     }
     void skeletonsTrackPendingCollectionsAndDetails() {
         QVERIFY(signIn());
