@@ -45,7 +45,7 @@ class LiveUiTests : public QObject {
     void focus(const QString &name) { auto *item = qobject_cast<QQuickItem *>(object(name)); QVERIFY2(item, qPrintable(name)); item->forceActiveFocus(); }
     void capture(const QString &name) {
         QTest::qWait(250);
-        const auto dir = qEnvironmentVariable("JF_SCREENSHOT_DIR");
+        const auto dir = qEnvironmentVariable("SOFAFIN_SCREENSHOT_DIR");
         if (dir.isEmpty()) return;
         QDir().mkpath(dir);
         const auto image = window->grabWindow();
@@ -59,8 +59,8 @@ class LiveUiTests : public QObject {
     void activate(const QVariantMap &item) { QVERIFY(QMetaObject::invokeMethod(window, "activate", Q_ARG(QVariant, QVariant(item)))); }
 private slots:
     void initTestCase() {
-        if (qEnvironmentVariableIsEmpty("JF_SERVER") || qEnvironmentVariableIsEmpty("JF_USERNAME") || qEnvironmentVariableIsEmpty("JF_PASSWORD"))
-            QSKIP("Set JF_SERVER, JF_USERNAME and JF_PASSWORD to run the live UI tests.");
+        if (qEnvironmentVariableIsEmpty("SOFAFIN_SERVER") || qEnvironmentVariableIsEmpty("SOFAFIN_USERNAME") || qEnvironmentVariableIsEmpty("SOFAFIN_PASSWORD"))
+            QSKIP("Set SOFAFIN_SERVER, SOFAFIN_USERNAME and SOFAFIN_PASSWORD to run the live UI tests.");
         QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, config.path());
         preferences = std::make_unique<Settings>(); preferences->setHardwareDecoding(false);
         player = std::make_unique<MpvPlayer>(); input = std::make_unique<ControllerInput>();
@@ -70,7 +70,7 @@ private slots:
         mpv_set_property_string(theme->core()->handle, "options/ao", "null");
         engine = std::make_unique<QQmlApplicationEngine>();
         engine->addImageProvider("blurhash", new BlurHashProvider);
-        qmlRegisterType<MpvVideo>("JFGamescope", 1, 0, "MpvVideo");
+        qmlRegisterType<MpvVideo>("Sofafin", 1, 0, "MpvVideo");
         auto *ctx = engine->rootContext();
         ctx->setContextProperty("App", controller.get()); ctx->setContextProperty("Player", player.get());
         ctx->setContextProperty("Preferences", preferences.get()); ctx->setContextProperty("Controller", input.get());
@@ -101,9 +101,9 @@ private slots:
     }
     void usability() {
         capture("login");
-        object("serverField")->setProperty("text", qEnvironmentVariable("JF_SERVER"));
-        object("usernameField")->setProperty("text", qEnvironmentVariable("JF_USERNAME"));
-        object("passwordField")->setProperty("text", qEnvironmentVariable("JF_PASSWORD"));
+        object("serverField")->setProperty("text", qEnvironmentVariable("SOFAFIN_SERVER"));
+        object("usernameField")->setProperty("text", qEnvironmentVariable("SOFAFIN_USERNAME"));
+        object("passwordField")->setProperty("text", qEnvironmentVariable("SOFAFIN_PASSWORD"));
         focus("signInButton"); QTest::keyClick(window, Qt::Key_Return);
         QVERIFY(controller->authenticating());
         QVERIFY(!object("loginScreen")->property("visible").toBool());
@@ -135,7 +135,7 @@ private slots:
             if (series.isEmpty()) for (const auto &v : grid->property("items").toList()) if (v.toMap().value("type") == "Series") { series = v.toMap(); break; }
         }
         qInfo("PASS: libraries, filtering, sorting, pagination");
-        const auto themeTitle = qEnvironmentVariable("JF_THEME_TEST_TITLE");
+        const auto themeTitle = qEnvironmentVariable("SOFAFIN_THEME_TEST_TITLE");
         if (!themeTitle.isEmpty()) {
             controller->search(themeTitle); QTRY_VERIFY_WITH_TIMEOUT(!controller->busy(), 15000);
             for (const auto &v : controller->shelves().first().toMap().value("items").toList())
@@ -260,7 +260,7 @@ private slots:
 };
 int main(int argc, char **argv) {
     QTemporaryDir displayConfig;
-    const int requestedHeight = qEnvironmentVariableIntValue("JF_TEST_HEIGHT");
+    const int requestedHeight = qEnvironmentVariableIntValue("SOFAFIN_TEST_HEIGHT");
     const int height = requestedHeight > 0 ? requestedHeight : 1080;
     const int width = height * 16 / 9;
     QFile file(displayConfig.filePath("screen.json"));

@@ -46,9 +46,9 @@ During investigation, one further 4K run timed out waiting for transcoded loadin
 
 `ctest --test-dir build --output-on-failure`: **all four suites passed** (native UI, core, playback startup, UI smoke). New checks cover pending skeletons, successful/expired session restoration, theme continuity, analog speed/acceleration, deferred seek commit/cancel, trickplay tile boundaries, and scale-control visibility while adjusting. Existing real libmpv tests verify audio/subtitle selection, decoding, pause, seek, and restart.
 
-Both the development application and release application were built. The release executable is `build-release/jf-gamescope`.
+Both the development application and release application were built. The release executable is `build-release/sofafin`.
 
-The opt-in integration runner is `build/jf-live-ui-tests`; see the README for environment variables and resolution commands. Screenshots and per-resolution logs from this run are under `/tmp/jf-usability` on the testing host, including `1080p-home.png`, `1080p-tracks.png`, `2160p-seeking.png`, and scale screenshots at all three resolutions.
+The opt-in integration runner is `build/sofafin-live-ui-tests`; see the README for environment variables and resolution commands. Screenshots and per-resolution logs from this run were saved on the testing host, including `1080p-home.png`, `1080p-tracks.png`, `2160p-seeking.png`, and scale screenshots at all three resolutions.
 
 ## Hardware limits
 

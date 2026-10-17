@@ -56,7 +56,7 @@ private slots:
         QVERIFY(encoder.waitForFinished(10000)); QCOMPARE(encoder.exitCode(), 0);
         auto environment = QProcessEnvironment::systemEnvironment();
         const auto previousPreload = environment.value("LD_PRELOAD");
-        environment.insert("LD_PRELOAD", QString::fromUtf8(JF_HWDEC_GUARD_PATH) + (previousPreload.isEmpty() ? "" : ":" + previousPreload));
+        environment.insert("LD_PRELOAD", QString::fromUtf8(SOFAFIN_HWDEC_GUARD_PATH) + (previousPreload.isEmpty() ? "" : ":" + previousPreload));
         QProcess child; child.setProcessEnvironment(environment);
         // First prove the fatal guard is installed; it replaces device creation in libavutil.
         child.start(QCoreApplication::applicationFilePath(), {"--check-guard"});

@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import JFGamescope 1.0
+import Sofafin 1.0
 
 FocusScope {
     id: playback

@@ -1,4 +1,5 @@
 #include "MpvPlayer.h"
+#include "ScreenSaverInhibitor.h"
 #include <QMetaObject>
 #include <stdexcept>
 #include <vector>
@@ -39,6 +40,13 @@ MpvPlayer::MpvPlayer(QObject *parent, bool audioOnly) : QObject(parent), m_core(
         auto *self = static_cast<MpvPlayer *>(ctx);
         QMetaObject::invokeMethod(self, [self] { self->drainEvents(); }, Qt::QueuedConnection);
     }, this);
+    if (!audioOnly) {
+        // libmpv's embedded renderer has no window to inhibit idle on our behalf.
+        auto *inhibitor = new ScreenSaverInhibitor(this);
+        connect(this, &MpvPlayer::changed, inhibitor, [this, inhibitor] {
+            inhibitor->setInhibited(m_active && !m_paused);
+        });
+    }
 }
 MpvPlayer::~MpvPlayer() { mpv_set_wakeup_callback(m_core->handle, nullptr, nullptr); }
 int MpvPlayer::command(std::initializer_list<QByteArray> args, quint64 request) {

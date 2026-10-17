@@ -1,10 +1,24 @@
 #include "Settings.h"
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QUuid>
 #include <algorithm>
 #include <cmath>
 
-Settings::Settings(QObject *parent) : QObject(parent), m_store(QSettings::IniFormat, QSettings::UserScope, "JF-Gamescope", "client") {
+Settings::Settings(QObject *parent) : QObject(parent), m_store(QSettings::IniFormat, QSettings::UserScope, "Sofafin", "client") {
+    if (!QFile::exists(m_store.fileName())) {
+        // Move the previous application's settings once, including its device ID and session.
+        QSettings legacy(QSettings::IniFormat, QSettings::UserScope, "JF-Gamescope", "client");
+        if (QFile::exists(legacy.fileName())) {
+            if (QFileInfo(m_store.fileName()).absoluteDir().mkpath(".") && QFile::rename(legacy.fileName(), m_store.fileName())) {
+                QFile::setPermissions(m_store.fileName(), QFile::ReadOwner | QFile::WriteOwner);
+                m_store.sync();
+            } else {
+                qWarning("Sofafin: Could not migrate existing settings.");
+            }
+        }
+    }
     if (!m_store.contains("deviceId")) put("deviceId", QUuid::createUuid().toString(QUuid::WithoutBraces));
 }
 void Settings::put(const QString &key, const QVariant &value) {

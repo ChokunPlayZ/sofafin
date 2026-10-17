@@ -86,7 +86,7 @@ private slots:
     void initTestCase() {
         QVERIFY(m_config.isValid());
         QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_config.path());
-        qmlRegisterType<MpvVideo>("JFGamescope", 1, 0, "MpvVideo");
+        qmlRegisterType<MpvVideo>("Sofafin", 1, 0, "MpvVideo");
     }
     void init() {
         m_settings = std::make_unique<Settings>(); m_settings->clearSession(); m_settings->setPlaybackMode("auto");
@@ -140,7 +140,7 @@ private slots:
     void captureKeyboardUrl(const QUrl &url) { m_keyboardUrl = url; }
     void steamKeyboardAndSignInFocus() {
         auto *server = qobject_cast<QQuickItem *>(object("serverField")); QVERIFY(server); server->forceActiveFocus();
-        const auto preview = qEnvironmentVariable("JF_LOGIN_SCREENSHOT");
+        const auto preview = qEnvironmentVariable("SOFAFIN_LOGIN_SCREENSHOT");
         if (!preview.isEmpty()) QVERIFY(m_window->grabWindow().save(preview));
         QTest::keyClick(m_window, Qt::Key_F2);
         QTRY_COMPARE(m_keyboardUrl.scheme(), "steam");
@@ -183,7 +183,7 @@ private slots:
         QTRY_VERIFY(accent->hasActiveFocus());
         auto *scroll = qobject_cast<QQuickItem *>(object("settingsScroll")); QVERIFY(scroll);
         QTRY_VERIFY(QRectF(0, 0, scroll->width(), scroll->height()).contains(accent->mapRectToItem(scroll, accent->boundingRect())));
-        const auto preview = qEnvironmentVariable("JF_SETTINGS_SCREENSHOT");
+        const auto preview = qEnvironmentVariable("SOFAFIN_SETTINGS_SCREENSHOT");
         if (!preview.isEmpty()) QVERIFY(m_window->grabWindow().save(preview));
         auto *scale = qobject_cast<QQuickItem *>(object("uiScaleSetting")); QVERIFY(scale);
         scale->forceActiveFocus();
@@ -223,7 +223,7 @@ private slots:
         m_app->home(); QTRY_VERIFY(!m_app->busy());
         m_app->open(m_app->libraries().first().toMap()); QTRY_VERIFY(!m_app->busy()); QVERIFY(m_app->canGoBack());
         m_app->back(); QTRY_VERIFY(!m_app->busy()); QCOMPARE(m_app->title(), "Home");
-        const auto preview = qEnvironmentVariable("JF_TEST_SCREENSHOT");
+        const auto preview = qEnvironmentVariable("SOFAFIN_TEST_SCREENSHOT");
         if (!preview.isEmpty()) QVERIFY(m_window->grabWindow().save(preview));
     }
     void libraryNavigation() {
@@ -236,6 +236,50 @@ private slots:
         QTest::keyClick(m_window, Qt::Key_Up);
         QTRY_VERIFY(object("shelf-0")->property("activeFocus").toBool());
     }
+    void homeFocusReturnsToSelectedShelf_data() {
+        QTest::addColumn<QSize>("windowSize");
+        QTest::newRow("normal") << QSize(1280, 800);
+        QTest::newRow("small") << QSize(800, 500);
+    }
+    void homeFocusReturnsToSelectedShelf() {
+        QFETCH(QSize, windowSize);
+        m_window->resize(windowSize);
+        QVERIFY(signIn());
+        QTRY_VERIFY(object("shelf-0")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Down); QTest::keyClick(m_window, Qt::Key_Down);
+        QTRY_VERIFY(object("shelf-2")->property("activeFocus").toBool());
+        for (int i = 0; i < 9; ++i) QTest::keyClick(m_window, Qt::Key_Right);
+        QCOMPARE(object("shelf-2")->property("itemIndex").toInt(), 9);
+        auto *scroll = qobject_cast<QQuickItem *>(object("mediaFlick")); QVERIFY(scroll);
+        QTRY_VERIFY(scroll->property("contentY").toDouble() > 0);
+        const auto selectedCardInside = [&] {
+            auto *focus = m_window->activeFocusItem();
+            auto *card = focus ? focus->property("currentItem").value<QQuickItem *>() : nullptr;
+            if (!card) card = focus;
+            return card && card->property("selected").toBool()
+                && QRectF(0, 0, scroll->width(), scroll->height()).adjusted(-1, -1, 1, 1)
+                    .contains(card->mapRectToItem(scroll, card->boundingRect()));
+        };
+        QTRY_VERIFY(selectedCardInside());
+        for (int i = 0; i < 2; ++i) {
+            QTest::keyClick(m_window, Qt::Key_Return);
+            QTRY_VERIFY(object("detailView")->property("visible").toBool());
+            QTRY_VERIFY(object("playButton")->property("activeFocus").toBool());
+            QCOMPARE(m_app->detail()["id"].toString(), "movie-9");
+            if (i == 1) {
+                qobject_cast<QQuickItem *>(object("favoriteButton"))->forceActiveFocus();
+                QTest::keyClick(m_window, Qt::Key_Return);
+                QTRY_VERIFY(m_app->detail()["favorite"].toBool());
+                QTRY_VERIFY(!m_app->updatingUserData());
+            }
+            QTest::keyClick(m_window, Qt::Key_Escape);
+            QTRY_VERIFY(!object("detailView")->property("visible").toBool());
+            QTRY_VERIFY(object("shelf-2")->property("activeFocus").toBool());
+            QCOMPARE(object("shelf-2")->property("itemIndex").toInt(), 9);
+            QCOMPARE(m_window->property("selectedMedia").toMap()["id"].toString(), "movie-9");
+            QTRY_VERIFY(selectedCardInside());
+        }
+    }
     void libraryGridNavigationAndPagination() {
         QVERIFY(signIn());
         m_app->openLibrary(m_app->libraries().first().toMap()); QTRY_VERIFY(!m_app->busy());
@@ -246,7 +290,7 @@ private slots:
         auto *first = qobject_cast<QQuickItem *>(object("gridCard-0")); QVERIFY(first);
         auto *secondRow = qobject_cast<QQuickItem *>(object(qPrintable(QString("gridCard-%1").arg(columns)))) ; QVERIFY(secondRow);
         QVERIFY(secondRow->y() > first->y()); QCOMPARE(secondRow->x(), first->x());
-        const auto preview = qEnvironmentVariable("JF_GRID_SCREENSHOT");
+        const auto preview = qEnvironmentVariable("SOFAFIN_GRID_SCREENSHOT");
         if (!preview.isEmpty()) QVERIFY(m_window->grabWindow().save(preview));
         QTest::keyClick(m_window, Qt::Key_Right); QTest::keyClick(m_window, Qt::Key_Down);
         QCOMPARE(grid->property("itemIndex").toInt(), columns + 1);
@@ -319,7 +363,7 @@ private slots:
         QCOMPARE(object("seasonShelf-0")->property("title").toString(), "Season 1");
         QCOMPARE(object("seasonShelf-1")->property("title").toString(), "Season 2");
         QCOMPARE(m_app->title(), "Home"); QVERIFY(!m_app->canGoBack());
-        const auto preview = qEnvironmentVariable("JF_SERIES_SCREENSHOT");
+        const auto preview = qEnvironmentVariable("SOFAFIN_SERIES_SCREENSHOT");
         if (!preview.isEmpty()) QVERIFY(m_window->grabWindow().save(preview));
         QTest::keyClick(m_window, Qt::Key_Down); QTest::keyClick(m_window, Qt::Key_Down);
         QTRY_VERIFY(object("watchedButton")->property("activeFocus").toBool());
@@ -543,7 +587,7 @@ private slots:
         auto *popup = object("detailView"); QVERIFY(QMetaObject::invokeMethod(popup, "open"));
         QTRY_VERIFY(object("playButton")->property("activeFocus").toBool());
         QVERIFY(!object("preplayQuality")->property("visible").toBool());
-        const auto preview = qEnvironmentVariable("JF_COMPACT_DETAIL_SCREENSHOT");
+        const auto preview = qEnvironmentVariable("SOFAFIN_COMPACT_DETAIL_SCREENSHOT");
         if (!preview.isEmpty()) QVERIFY(m_window->grabWindow().save(preview));
         QTest::keyClick(m_window, Qt::Key_Down); QTest::keyClick(m_window, Qt::Key_Down);
         QTRY_VERIFY(object("favoriteButton")->property("activeFocus").toBool());
@@ -675,7 +719,7 @@ private slots:
         QTest::keyClick(m_window, Qt::Key_Return);
         QTRY_VERIFY(!object("preplayQuality")->property("visible").toBool());
         QTRY_VERIFY(insideScroll(qobject_cast<QQuickItem *>(object("preplaySettingsButton"))));
-        const auto preview = qEnvironmentVariable("JF_DETAIL_SCREENSHOT");
+        const auto preview = qEnvironmentVariable("SOFAFIN_DETAIL_SCREENSHOT");
         if (!preview.isEmpty()) QVERIFY(m_window->grabWindow().save(preview));
         auto *chapter = qobject_cast<QQuickItem *>(object("chapterButton-0")); QVERIFY(chapter);
         QVERIFY(!chapter->isVisible());
@@ -1235,7 +1279,7 @@ private slots:
         auto *view = qobject_cast<QQuickItem *>(object("playbackView")); QVERIFY(view); view->forceActiveFocus();
         QVERIFY(object("playerOverlay")->property("visible").toBool());
         QVERIFY(!object("endingTime")->property("text").toString().isEmpty());
-        const auto controlsPreview = qEnvironmentVariable("JF_PLAYER_SCREENSHOT");
+        const auto controlsPreview = qEnvironmentVariable("SOFAFIN_PLAYER_SCREENSHOT");
         if (!controlsPreview.isEmpty()) QVERIFY(m_window->grabWindow().save(controlsPreview));
         qobject_cast<QQuickItem *>(object("playerSettings"))->forceActiveFocus();
         QTest::keyClick(m_window, Qt::Key_Return);
@@ -1270,7 +1314,7 @@ private slots:
         auto *timer = object("pauseScreenTimer"); QVERIFY(timer); QCOMPARE(timer->property("interval").toInt(), 10000);
         timer->setProperty("interval", 120);
         QTRY_VERIFY(object("pauseScreen")->property("visible").toBool());
-        const auto screenshot = qEnvironmentVariable("JF_PAUSE_SCREENSHOT");
+        const auto screenshot = qEnvironmentVariable("SOFAFIN_PAUSE_SCREENSHOT");
         if (!screenshot.isEmpty()) QVERIFY(m_window->grabWindow().save(screenshot));
         QVERIFY(!object("playerOverlay")->property("visible").toBool());
         QTest::keyClick(m_window, Qt::Key_Down);
