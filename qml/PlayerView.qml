@@ -192,7 +192,7 @@ FocusScope {
         id: skipButton
         objectName: "skipSegmentButton"
         anchors { right: parent.right; bottom: parent.bottom; margins: 28; bottomMargin: overlay.visible ? overlay.height + 12 : 35 }
-        visible: !!playback.segment.type && !playback.pauseScreenVisible
+        visible: !!playback.segment.type && !playback.pauseScreenVisible && !seekBar.seeking && !App.playbackPending
         text: "Skip " + ({Intro: "intro", Outro: "credits", Recap: "recap", Preview: "preview", Commercial: "commercial"})[playback.segment.type]
         primary: true; accent: playback.accent
         upTarget: playback; downTarget: seekBar

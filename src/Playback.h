@@ -12,6 +12,7 @@ QJsonObject request(const QString &userId, const QString &mode, int bitrate, qin
 QVariantList tracks(const QJsonObject &source, const QString &type);
 QString mediaInfo(const QJsonObject &source);
 QVariantList segments(const QJsonObject &response);
+QVariantList chapterSegments(const QVariantList &chapters, double duration);
 QVariantMap activeSegment(const QVariantList &segments, double position);
 struct Plan {
     QUrl url;

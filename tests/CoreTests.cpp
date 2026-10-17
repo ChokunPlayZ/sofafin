@@ -79,6 +79,55 @@ private slots:
         QCOMPARE(Playback::activeSegment(segments, 200).value("type").toString(), "Outro");
         QVERIFY(Playback::segments({}).isEmpty());
     }
+    void namedChaptersProvideSegmentFallback() {
+        const QVariantList chapters{
+            QVariantMap{{"name", "Outro"}, {"ticks", 12757090000LL}},
+            QVariantMap{{"name", "Prologue"}, {"ticks", 0}},
+            QVariantMap{{"name", "Opening"}, {"ticks", 570390000LL}},
+            QVariantMap{{"name", "Part A"}, {"ticks", 1469990000LL}},
+            QVariantMap{{"name", "Part B"}, {"ticks", 9369990000LL}},
+            QVariantMap{{"name", "Intro"}, {"ticks", -1}},
+            QVariantMap{{"name", "Credits"}}};
+        const auto segments = Playback::chapterSegments(chapters, 1440);
+        QCOMPARE(segments.size(), 2);
+        QCOMPARE(segments.first().toMap()["type"].toString(), "Intro");
+        QCOMPARE(segments.first().toMap()["start"].toDouble(), 57.039);
+        QCOMPARE(segments.first().toMap()["end"].toDouble(), 146.999);
+        QCOMPARE(segments.last().toMap()["type"].toString(), "Outro");
+        QCOMPARE(segments.last().toMap()["end"].toDouble(), 1440.0);
+        QVERIFY(Playback::activeSegment(segments, 57).isEmpty());
+        QCOMPARE(Playback::activeSegment(segments, 60)["type"].toString(), "Intro");
+        QVERIFY(Playback::activeSegment(segments, 146.999).isEmpty());
+        QVERIFY(Playback::chapterSegments(chapters, 0).isEmpty());
+    }
+    void chapterSegmentTypes_data() {
+        QTest::addColumn<QString>("name"); QTest::addColumn<QString>("type");
+        QTest::newRow("intro") << "Intro" << "Intro";
+        QTest::newRow("opening-credits") << "Opening Credits" << "Intro";
+        QTest::newRow("anime-op") << " OP 2 " << "Intro";
+        QTest::newRow("outro") << "Outro" << "Outro";
+        QTest::newRow("ending") << "Ending" << "Outro";
+        QTest::newRow("anime-ed") << "ED1" << "Outro";
+        QTest::newRow("credits") << "End Credits" << "Outro";
+        QTest::newRow("recap") << "Recap" << "Recap";
+        QTest::newRow("previously") << "Previously on" << "Recap";
+        QTest::newRow("preview") << "Preview" << "Preview";
+        QTest::newRow("next-time") << "Next time" << "Preview";
+        QTest::newRow("commercial") << "Commercial" << "Commercial";
+        QTest::newRow("advertisement") << "Advertisement" << "Commercial";
+        QTest::newRow("generic-chapter") << "Chapter 1" << "";
+        QTest::newRow("story-title") << "Opening the door" << "";
+        QTest::newRow("part-a") << "Part A" << "";
+    }
+    void chapterSegmentTypes() {
+        QFETCH(QString, name); QFETCH(QString, type);
+        const auto segments = Playback::chapterSegments({QVariantMap{{"name", name}, {"ticks", 0}},
+            QVariantMap{{"name", "Story"}, {"ticks", 300000000}}}, 120);
+        if (type.isEmpty()) { QVERIFY(segments.isEmpty()); return; }
+        QCOMPARE(segments.size(), 1);
+        QCOMPARE(segments.first().toMap()["type"].toString(), type);
+        QCOMPARE(segments.first().toMap()["end"].toDouble(), 30.0);
+    }
     void sourceTracksAndInfo() {
         const QJsonObject source{{"Container", "mkv"}, {"Bitrate", 8000000}, {"MediaStreams", QJsonArray{
             QJsonObject{{"Type", "Video"}, {"Index", 0}, {"Codec", "hevc"}, {"Width", 1920}, {"Height", 1080}},

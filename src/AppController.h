@@ -99,7 +99,8 @@ private:
     QVariantList items(const QJsonObject &response) const;
     void fetchPage(bool append = false);
     void beginPlay(const QVariantMap &item, qint64 startTicks, bool paused = false);
-    void fetchSegments();
+    void fetchPlaybackMarkers();
+    void refreshSegments();
     void report(const QString &event);
     void finishSession();
     void setError(const QString &error);
@@ -128,8 +129,8 @@ private:
     bool m_negotiating = false, m_reportedStart = false;
     QVariantMap m_currentItem;
     QVariantMap m_playbackOptions;
-    QVariantList m_segments;
-    int m_segmentGeneration = 0;
+    QVariantList m_segments, m_serverSegments;
+    int m_markerGeneration = 0;
     bool m_resumePaused = false;
     Playback::Plan m_plan;
     QTimer m_progress;

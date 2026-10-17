@@ -161,6 +161,8 @@ QVariantMap AppController::normalize(const QJsonObject &o) const {
     }
     for (const auto &v : o.value("Chapters").toArray()) {
         const auto chapter = v.toObject();
+        const auto start = chapter.value("StartPositionTicks");
+        if (!start.isDouble() || start.toDouble() < 0) continue;
         chapters.append(QVariantMap{{"name", chapter.value("Name").toString()}, {"ticks", chapter.value("StartPositionTicks").toDouble()}});
     }
     return {{"id", id}, {"title", o.value("Name").toString()}, {"subtitle", subtitle}, {"type", type},
@@ -454,19 +456,35 @@ QVariantMap AppController::currentSource() const { return sourceDetails(m_plan.s
 void AppController::play(const QVariantMap &item, bool resume, const QVariantMap &options) {
     if (!signedIn() || m_negotiating || item.value("folder").toBool() || item.value("id").toString().isEmpty()) return;
     m_playbackOptions = options;
-    m_segments.clear();
+    m_segments.clear(); m_serverSegments.clear();
     beginPlay(item, resume ? qint64(item.value("positionTicks").toDouble()) : 0);
-    fetchSegments();
+    fetchPlaybackMarkers();
 }
-void AppController::fetchSegments() {
-    const int generation = ++m_segmentGeneration;
-    m_api.get("MediaSegments/" + m_currentItem.value("id").toString(), {},
+void AppController::fetchPlaybackMarkers() {
+    const int generation = ++m_markerGeneration;
+    const auto itemId = m_currentItem.value("id").toString();
+    refreshSegments();
+    m_api.get("MediaSegments/" + itemId, {},
         [this, generation](const QJsonObject &response, const QString &error) {
-        if (generation != m_segmentGeneration) return;
+        if (generation != m_markerGeneration) return;
         // Segment providers are optional, including on servers predating this API.
-        m_segments = error.isEmpty() ? Playback::segments(response) : QVariantList{};
-        emit changed();
+        m_serverSegments = error.isEmpty() ? Playback::segments(response) : QVariantList{};
+        refreshSegments();
     });
+    // Shelf items omit chapters; fetch them without delaying playback.
+    m_api.get("Items/" + itemId, query({{"UserId", m_userId}}),
+        [this, generation, itemId](const QJsonObject &response, const QString &error) {
+        if (generation != m_markerGeneration || !error.isEmpty() ||
+            response.value("Id").toString() != itemId || !response.value("Chapters").isArray()) return;
+        m_currentItem["chapters"] = normalize(response).value("chapters");
+        refreshSegments();
+    });
+}
+void AppController::refreshSegments() {
+    m_segments = m_serverSegments.isEmpty()
+        ? Playback::chapterSegments(m_currentItem.value("chapters").toList(), m_currentItem.value("runtime").toDouble())
+        : m_serverSegments;
+    emit changed();
 }
 void AppController::beginPlay(const QVariantMap &item, qint64 startTicks, bool paused) {
     stopThemeSong();
@@ -532,7 +550,7 @@ void AppController::finishSession() {
     m_plan = {}; m_reportedStart = false;
 }
 void AppController::stopPlayback() {
-    ++m_playGeneration; ++m_segmentGeneration; m_segments.clear(); m_negotiating = false; finishSession(); m_player->stop(); emit changed();
+    ++m_playGeneration; ++m_markerGeneration; m_segments.clear(); m_serverSegments.clear(); m_negotiating = false; finishSession(); m_player->stop(); emit changed();
 }
 void AppController::seekRelative(double seconds) {
     if (!m_player->active() || m_negotiating) return;
