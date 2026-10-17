@@ -207,8 +207,9 @@ void MpvPlayer::drainEvents() {
             const auto *end = static_cast<mpv_event_end_file *>(event->data);
             if (end->reason == MPV_END_FILE_REASON_EOF || end->reason == MPV_END_FILE_REASON_ERROR) {
                 m_active = m_hasFrame = false; m_fileLoading = m_cacheLoading = m_seekLoading = false;
-                m_pendingSeek = 0; m_networkSpeed = -1; emit ended();
-                if (end->reason == MPV_END_FILE_REASON_ERROR) emit error("mpv could not play this stream. Check the connection or try transcoding in Settings.");
+                m_pendingSeek = 0; m_networkSpeed = -1;
+                if (end->reason == MPV_END_FILE_REASON_EOF) emit ended();
+                else emit error("mpv could not play this stream. Check the connection or try transcoding in Settings.");
             }
         }
         emit changed();

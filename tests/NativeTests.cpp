@@ -39,6 +39,36 @@ class NativeTests : public QObject {
             {"RunTimeTicks", 72000000000LL}, {"Overview", "A small crew crosses an unfamiliar ocean in search of a place to call home."},
             {"UserData", QJsonObject{{"PlaybackPositionTicks", 1200000000}}}};
     }
+    QJsonObject episode(const QString &id) {
+        const int number = id.section('-', -1).toInt();
+        return {{"Id", id}, {"Name", QString("Episode %1").arg(number)}, {"Type", "Episode"},
+            {"SeriesId", "series"}, {"SeriesName", "A series"},
+            {"ParentIndexNumber", number == 1 ? 1 : 2}, {"IndexNumber", number == 1 ? 1 : number - 1},
+            {"RunTimeTicks", 1200000000}, {"UserData", QJsonObject{{"PlaybackPositionTicks", 200000000}}}};
+    }
+    QVariantMap playingEpisode(double position = 0) {
+        return {{"id", "episode-1"}, {"title", "Episode 1"}, {"type", "Episode"},
+            {"seriesId", "series"}, {"seriesName", "A series"}, {"seasonNumber", 1}, {"episodeNumber", 1},
+            {"runtime", 120}, {"positionTicks", position * 10000000}};
+    }
+    void serveEpisodeSequence(int delay = 0, int status = 200) {
+        const auto original = m_network->respond;
+        m_network->respond = [this, original, delay, status](const FixtureRequest &request) {
+            const auto path = request.request.url().path();
+            if (path.endsWith("Shows/series/Episodes")) {
+                const auto id = QUrlQuery(request.request.url()).queryItemValue("StartItemId");
+                QJsonArray episodes{episode(id)};
+                const int number = id.section('-', -1).toInt();
+                if (number < 3) episodes.append(episode(QString("episode-%1").arg(number + 1)));
+                return FixtureResponse{QJsonDocument(QJsonObject{{"Items", episodes}}).toJson(), status, delay};
+            }
+            if (path.endsWith("/episode-2/PlaybackInfo")) return FixtureResponse{R"({"PlaySessionId":"next-session",
+                "MediaSources":[{"Id":"next-source","SupportsDirectPlay":true,"TranscodingUrl":"/base/Videos/episode-2/master.m3u8"}]})"};
+            if (path.contains("/Items/episode-") && !path.endsWith("PlaybackInfo"))
+                return FixtureResponse{QJsonDocument(episode(path.section('/', -1))).toJson()};
+            return original(request);
+        };
+    }
     bool signIn() {
         m_app->login("https://fixture.invalid/base", "fixture", "fixture-password", false);
         return QTest::qWaitFor([this] { return m_app->signedIn() && !m_app->busy(); }, 3000);
@@ -958,6 +988,163 @@ private slots:
         m_app->skipSegment();
         QVERIFY(!m_player->active()); QVERIFY(!m_app->playbackPending()); QVERIFY(m_app->mediaSegments().isEmpty());
     }
+    void nextEpisodeCountdownAndTerminalSegments_data() {
+        QTest::addColumn<double>("start"); QTest::addColumn<double>("end");
+        QTest::addColumn<bool>("chapter"); QTest::addColumn<double>("promptStart");
+        QTest::newRow("last-thirty-seconds") << -1.0 << -1.0 << false << 90.0;
+        QTest::newRow("final-server-segment") << 60.0 << 120.0 << false << 60.0;
+        QTest::newRow("rounded-server-end") << 60.0 << 120.4 << false << 60.0;
+        QTest::newRow("final-chapter-segment") << 60.0 << 120.0 << true << 60.0;
+        QTest::newRow("post-credits-content") << 60.0 << 100.0 << false << 90.0;
+        QTest::newRow("short-final-segment") << 100.0 << 120.0 << false << 100.0;
+    }
+    void nextEpisodeCountdownAndTerminalSegments() {
+        QFETCH(double, start); QFETCH(double, end); QFETCH(bool, chapter); QFETCH(double, promptStart);
+        QVERIFY(signIn()); serveEpisodeSequence(); m_window->resize(800, 500);
+        const auto original = m_network->respond;
+        m_network->respond = [this, original, start, end, chapter](const FixtureRequest &request) {
+            const auto path = request.request.url().path();
+            if (path.contains("MediaSegments/")) {
+                QJsonArray segments;
+                if (start >= 0 && !chapter) segments.append(QJsonObject{{"Type", "Outro"},
+                    {"StartTicks", start * 10000000}, {"EndTicks", end * 10000000}});
+                return FixtureResponse{QJsonDocument(QJsonObject{{"Items", segments}}).toJson()};
+            }
+            if (chapter && path.endsWith("/Items/episode-1")) {
+                auto item = episode("episode-1");
+                item["Chapters"] = QJsonArray{QJsonObject{{"Name", "Credits"}, {"StartPositionTicks", start * 10000000}}};
+                return FixtureResponse{QJsonDocument(item).toJson()};
+            }
+            return original(request);
+        };
+        m_app->play(playingEpisode(promptStart - 0.25), true, {{"quality", 8000000}});
+        QTRY_VERIFY(m_player->active()); QTRY_VERIFY(m_app->autoplayNextEpisode());
+        if (start >= 0) QTRY_COMPARE(m_app->mediaSegments().size(), 1);
+        auto *prompt = qobject_cast<QQuickItem *>(object("nextEpisodePrompt")); QVERIFY(prompt);
+        QVERIFY(!prompt->isVisible());
+        m_app->seekRelative(0.25); QTRY_VERIFY(!m_app->playbackPending());
+        QTRY_VERIFY(prompt->isVisible());
+        QCOMPARE(object("nextEpisodeCountdown")->property("text").toString(),
+            QString("Next Episode in %1 seconds").arg(qCeil(120 - promptStart)));
+        QCOMPARE(object("nextEpisodeInfo")->property("text").toString(), "S2 · E1  Episode 2");
+        QVERIFY(!object("skipSegmentButton")->property("visible").toBool());
+        QTRY_VERIFY(QRectF(0, 0, m_window->width(), m_window->height()).contains(prompt->mapRectToScene(prompt->boundingRect())));
+        QVERIFY(QMetaObject::invokeMethod(object("playbackView"), "hideOverlay"));
+        QVERIFY(prompt->isVisible());
+        QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("nextEpisodeNow")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Up);
+        m_player->togglePause(); QTRY_VERIFY(m_player->paused());
+        const auto countdown = object("nextEpisodeCountdown")->property("text").toString();
+        QTest::qWait(100); QCOMPARE(object("nextEpisodeCountdown")->property("text").toString(), countdown);
+        m_app->seekRelative(-1); QTRY_VERIFY(!m_app->playbackPending()); QVERIFY(!prompt->isVisible());
+        m_app->seekRelative(1); QTRY_VERIFY(!m_app->playbackPending()); QTRY_VERIFY(prompt->isVisible());
+        m_app->stopPlayback();
+    }
+    void nextEpisodeStartsAutomaticallyAndNow_data() {
+        QTest::addColumn<bool>("automatic");
+        QTest::newRow("natural-end") << true;
+        QTest::newRow("start-now") << false;
+    }
+    void nextEpisodeStartsAutomaticallyAndNow() {
+        QFETCH(bool, automatic);
+        QVERIFY(signIn()); serveEpisodeSequence();
+        m_app->play(playingEpisode(95), true, {{"quality", 8000000}, {"sourceId", "source"}, {"audio", 2}, {"subtitle", -1}});
+        QTRY_VERIFY(m_player->active()); QTRY_VERIFY(m_app->autoplayNextEpisode());
+        m_player->loaded(); // A rendered stream reports its session before the handoff.
+        if (automatic) m_player->ended();
+        else {
+            QVERIFY(QMetaObject::invokeMethod(object("playbackView"), "focusVideo"));
+            QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(object("nextEpisodeNow")->property("activeFocus").toBool());
+            QTest::keyClick(m_window, Qt::Key_Return);
+        }
+        QTRY_COMPARE(m_app->currentItem().value("id").toString(), "episode-2");
+        QTRY_VERIFY(!m_app->playbackPending()); QVERIFY(m_player->active());
+        QCOMPARE(m_player->position(), 0.0); // A successor starts from the beginning, even if previously resumed.
+        QCOMPARE(m_app->playbackOptions().value("quality").toInt(), 8000000);
+        QCOMPARE(m_app->playbackOptions().value("sourceId").toString(), "next-source");
+        QVERIFY(!m_app->playbackOptions().contains("audio")); QVERIFY(!m_app->playbackOptions().contains("subtitle"));
+        QTRY_COMPARE(m_app->nextEpisode().value("id").toString(), "episode-3");
+        QVERIFY(!object("nextEpisodePrompt")->property("visible").toBool());
+        bool stopped = false, started = false;
+        for (const auto &request : m_network->requests) {
+            const auto body = QJsonDocument::fromJson(request.body).object();
+            if (request.request.url().path().endsWith("Sessions/Playing/Stopped")) {
+                stopped = body.value("ItemId") == "episode-1" && body.value("PlaySessionId") == "session"
+                    && body.value("AudioStreamIndex").toInt() == 2 && body.value("SubtitleStreamIndex").toInt() == -1;
+            }
+            if (request.request.url().path().endsWith("episode-2/PlaybackInfo")) {
+                started = body.value("StartTimeTicks").toInteger() == 0 && !body.contains("MediaSourceId")
+                    && !body.contains("AudioStreamIndex") && !body.contains("SubtitleStreamIndex");
+            }
+        }
+        QVERIFY(stopped); QVERIFY(started); m_app->stopPlayback();
+    }
+    void closingNextEpisodeCancelsUntilEpisodeEnds() {
+        QVERIFY(signIn()); serveEpisodeSequence();
+        const auto original = m_network->respond;
+        m_network->respond = [original](const FixtureRequest &request) {
+            if (request.request.url().path().contains("MediaSegments/"))
+                return FixtureResponse{R"({"Items":[{"Type":"Outro","StartTicks":600000000,"EndTicks":1200000000}]})"};
+            return original(request);
+        };
+        m_app->play(playingEpisode(95), true, {{"quality", 8000000}});
+        QTRY_VERIFY(m_player->active()); QTRY_VERIFY(m_app->autoplayNextEpisode());
+        QVERIFY(QMetaObject::invokeMethod(object("playbackView"), "focusVideo"));
+        QTest::keyClick(m_window, Qt::Key_Down); QTest::keyClick(m_window, Qt::Key_Right);
+        QTRY_VERIFY(object("nextEpisodeClose")->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Return);
+        QVERIFY(!m_app->autoplayNextEpisode()); QVERIFY(m_player->active());
+        QVERIFY(!object("nextEpisodePrompt")->property("visible").toBool());
+        QVERIFY(!object("skipSegmentButton")->property("visible").toBool());
+        m_app->seekRelative(-50); QTRY_VERIFY(!m_app->playbackPending());
+        m_app->seekRelative(50); QTRY_VERIFY(!m_app->playbackPending());
+        m_app->setQuality(4000000); QTRY_VERIFY(!m_app->playbackPending());
+        QVERIFY(!m_app->autoplayNextEpisode()); QVERIFY(!object("nextEpisodePrompt")->property("visible").toBool());
+        QVERIFY(!object("skipSegmentButton")->property("visible").toBool());
+        m_player->ended(); QVERIFY(!m_player->active()); QVERIFY(m_app->nextEpisode().isEmpty());
+        QVERIFY(!object("playbackView")->property("visible").toBool());
+        QTRY_VERIFY(!m_app->busy());
+        m_app->play(playingEpisode(95), true, {{"quality", 8000000}});
+        QTRY_VERIFY(m_player->active()); QTRY_VERIFY(m_app->autoplayNextEpisode());
+        QVERIFY(object("nextEpisodePrompt")->property("visible").toBool());
+        m_app->stopPlayback();
+    }
+    void unavailableAndStaleNextEpisodes_data() {
+        QTest::addColumn<QString>("action");
+        QTest::newRow("lookup-error") << "lookup-error";
+        QTest::newRow("last-episode") << "last-episode";
+        QTest::newRow("stop-before-reply") << "stop";
+        QTest::newRow("end-before-reply") << "end";
+        QTest::newRow("different-title-before-reply") << "different-title";
+        QTest::newRow("playback-error") << "playback-error";
+    }
+    void unavailableAndStaleNextEpisodes() {
+        QFETCH(QString, action);
+        QVERIFY(signIn()); serveEpisodeSequence(100, action == "lookup-error" ? 404 : 200);
+        auto item = playingEpisode(95);
+        if (action == "last-episode") item["id"] = "episode-3";
+        m_app->play(item, true, {{"quality", 8000000}}); QTRY_VERIFY(m_player->active());
+        if (action == "stop") m_app->stopPlayback();
+        else if (action == "end") m_player->ended();
+        else if (action == "different-title") {
+            m_app->play({{"id", "movie"}, {"type", "Movie"}, {"runtime", 120}}, false);
+            QTRY_VERIFY(!m_app->playbackPending());
+        } else if (action == "playback-error") {
+            QTRY_VERIFY(m_app->autoplayNextEpisode());
+            m_player->error("Playback failed");
+            QCOMPARE(m_app->message(), "Playback failed"); QVERIFY(!m_player->active());
+        }
+        QTest::qWait(150);
+        QVERIFY(m_app->nextEpisode().isEmpty()); QVERIFY(!m_app->autoplayNextEpisode());
+        QVERIFY(!object("nextEpisodePrompt")->property("visible").toBool());
+        QVERIFY(std::none_of(m_network->requests.begin(), m_network->requests.end(), [](const auto &request) {
+            return request.request.url().path().endsWith("episode-2/PlaybackInfo");
+        }));
+        if (action == "lookup-error" || action == "last-episode") {
+            QVERIFY(m_app->message().isEmpty()); m_player->ended(); QVERIFY(!m_player->active());
+        }
+        m_app->stopPlayback();
+    }
     void overlayBackUpAndPauseScreen() {
         QVERIFY(signIn());
         auto item = m_app->shelves().first().toMap()["items"].toList().first().toMap();
@@ -1170,6 +1357,8 @@ private slots:
         mpv_set_property_string(m_player->core()->handle, "options/ao", "null");
         renderTimer.start(15); m_player->rendererReady();
         QSignalSpy loaded(m_player.get(), &MpvPlayer::loaded);
+        QSignalSpy ended(m_player.get(), &MpvPlayer::ended);
+        QSignalSpy errors(m_player.get(), &MpvPlayer::error);
         m_player->load(QUrl::fromLocalFile(clip), 0, 0, 3, false);
         QTRY_COMPARE_WITH_TIMEOUT(loaded.size(), 1, 5000);
         QTRY_VERIFY_WITH_TIMEOUT(frames > 2 && m_player->position() > 0.2, 5000);
@@ -1199,6 +1388,12 @@ private slots:
         QVERIFY(!m_player->hasFrame());
         QTRY_COMPARE_WITH_TIMEOUT(loaded.size(), 2, 5000);
         QTRY_VERIFY(m_player->position() >= 0.9 && m_player->hasFrame());
+        m_player->seek(2.6);
+        QTRY_COMPARE_WITH_TIMEOUT(ended.size(), 1, 5000);
+        QCOMPARE(errors.size(), 0); QVERIFY(!m_player->active());
+        m_player->load(QUrl::fromLocalFile(dir.filePath("missing.mp4")), 0, 0, 3, false);
+        QTRY_COMPARE_WITH_TIMEOUT(errors.size(), 1, 5000);
+        QCOMPARE(ended.size(), 1); // Playback failures must never trigger automatic advancement.
         m_player->stop(); renderTimer.stop();
     }
     void bufferingShowsNetworkSpeedWithoutBlockingUi() {

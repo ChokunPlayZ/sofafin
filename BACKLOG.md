@@ -3,7 +3,7 @@
 ## Movie and TV follow-ups
 
 - Validate Steam keyboard overlay, Gamescope, OpenGL, and hardware decoding on a physical Steam Deck.
-- Automatic next-episode playback and persistent queues.
+- Persistent playback queues.
 - Quick Connect and bundled distribution.
 
 ## Deferred — back of backlog
