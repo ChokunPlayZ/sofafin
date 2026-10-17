@@ -68,6 +68,19 @@ FocusScope {
             else tracks.focusQuality()
         })
     }
+    Connections {
+        target: Controller
+        function onAxisChanged() {
+            if (Controller.horizontalAxis === 0 || !playback.visible || !seekBar.enabled
+                || playback.popupClosing || trackPopup.visible || infoPopup.visible) return
+            const window = playback.Window.window
+            if (!window || !window.active || window.activeFocusItem !== playback) return
+            playback.activity()
+            // Claim this axis event before it becomes a navigation key.
+            seekBar.forceActiveFocus()
+            seekBar.begin()
+        }
+    }
     Keys.onPressed: event => {
         if (popupClosing || trackPopup.visible || infoPopup.visible) { event.accepted = true; return }
         if (App.playbackPending && event.key !== Qt.Key_Escape) { event.accepted = true; return }
@@ -76,9 +89,12 @@ FocusScope {
         else {
             activity()
             if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) Player.togglePause()
-            else if (event.key === Qt.Key_Left) App.seekRelative(-10)
-            else if (event.key === Qt.Key_Right) App.seekRelative(10)
-            else if (event.key === Qt.Key_Down) { if (skipButton.visible) skipButton.forceActiveFocus(); else seekBar.forceActiveFocus() }
+            else if (event.key === Qt.Key_Left || event.key === Qt.Key_Right) {
+                if (seekBar.enabled) {
+                    seekBar.forceActiveFocus()
+                    seekBar.nudgeKey(event.key === Qt.Key_Left ? -1 : 1)
+                }
+            } else if (event.key === Qt.Key_Down) { if (skipButton.visible) skipButton.forceActiveFocus(); else seekBar.forceActiveFocus() }
             else if (event.key === Qt.Key_I) infoPopup.open()
             else return
         }

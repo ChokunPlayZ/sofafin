@@ -52,13 +52,16 @@ FocusScope {
         previewPosition = Math.max(0, Math.min(Math.max(0, Player.duration - 1), previewPosition + seconds))
         activity()
     }
+    function nudgeKey(sign) {
+        const now = Date.now()
+        keyRepeats = now - lastKeyTime < 400 && direction === sign ? keyRepeats + 1 : 0
+        lastKeyTime = now; direction = sign
+        nudge(sign * Math.min(60, 5 * (1 + Math.floor(keyRepeats / 6))))
+    }
     Keys.onPressed: event => {
         if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { if (seeking) commit(); else begin() }
         else if (event.key === Qt.Key_Left || event.key === Qt.Key_Right) {
-            const now = Date.now(), sign = event.key === Qt.Key_Left ? -1 : 1
-            keyRepeats = now - lastKeyTime < 400 && direction === sign ? keyRepeats + 1 : 0
-            lastKeyTime = now; direction = sign
-            nudge(sign * Math.min(60, 5 * (1 + Math.floor(keyRepeats / 6))))
+            nudgeKey(event.key === Qt.Key_Left ? -1 : 1)
         } else if (event.key === Qt.Key_Escape) { if (seeking) { cancel(); activity() } else moveUp() }
         else if (event.key === Qt.Key_Up) { cancel(); moveUp() }
         else if (event.key === Qt.Key_Down) { cancel(); moveDown() }
