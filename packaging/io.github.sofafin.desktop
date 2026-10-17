@@ -1,9 +1,9 @@
 [Desktop Entry]
 Type=Application
-Name=JF Gamescope
+Name=Sofafin
 Comment=Controller-first Jellyfin client
-Exec=jf-gamescope --fullscreen
-Icon=io.github.jfgamescope
+Exec=sofafin --fullscreen
+Icon=io.github.sofafin
 Terminal=false
 Categories=AudioVideo;Video;Player;
 Keywords=Jellyfin;Steam;Deck;gamescope;

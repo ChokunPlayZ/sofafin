@@ -8,18 +8,22 @@
 #include <QQuickWindow>
 #include <QQuickStyle>
 #include <QCommandLineParser>
+#include <QIcon>
 #include <QImage>
 #include <QTimer>
 #include <cstdio>
 
 int main(int argc, char *argv[]) {
-    QGuiApplication::setApplicationName("JF-Gamescope");
-    QGuiApplication::setOrganizationName("JF-Gamescope");
+    QGuiApplication::setApplicationName("Sofafin");
+    QGuiApplication::setOrganizationName("Sofafin");
     QGuiApplication::setApplicationVersion("0.1.0");
     // libmpv's OpenGL renderer shares the native Qt scene graph context.
     if (qEnvironmentVariable("QT_QUICK_BACKEND") != "software") QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
     QQuickStyle::setStyle("Basic");
     QGuiApplication app(argc, argv);
+    QGuiApplication::setApplicationDisplayName("Sofafin");
+    QGuiApplication::setDesktopFileName("io.github.sofafin");
+    QGuiApplication::setWindowIcon(QIcon(":/assets/logo.svg"));
     QCommandLineParser args;
     args.setApplicationDescription("Native, controller-first Jellyfin client for Steam Deck and gamescope.");
     args.addHelpOption(); args.addVersionOption();
@@ -35,7 +39,7 @@ int main(int argc, char *argv[]) {
         AppController controller(&settings, &player);
         QQmlApplicationEngine engine;
         engine.addImageProvider("blurhash", new BlurHashProvider);
-        qmlRegisterType<MpvVideo>("JFGamescope", 1, 0, "MpvVideo");
+        qmlRegisterType<MpvVideo>("Sofafin", 1, 0, "MpvVideo");
         engine.rootContext()->setContextProperty("App", &controller);
         engine.rootContext()->setContextProperty("Player", &player);
         engine.rootContext()->setContextProperty("Preferences", &settings);
@@ -55,7 +59,7 @@ int main(int argc, char *argv[]) {
         });
         return app.exec();
     } catch (const std::exception &error) {
-        std::fprintf(stderr, "JF-Gamescope: %s\n", error.what());
+        std::fprintf(stderr, "Sofafin: %s\n", error.what());
         return 1;
     }
 }

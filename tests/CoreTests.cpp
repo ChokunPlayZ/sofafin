@@ -1,16 +1,85 @@
 #include "Playback.h"
 #include "JellyfinClient.h"
+#include "Settings.h"
 #include "FakeNetwork.h"
 #include <QtTest>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QFile>
 #include <QNetworkProxy>
+#include <QTemporaryDir>
 
 class CoreTests : public QObject {
     Q_OBJECT
 private slots:
+    void settingsMigration_data() {
+        QTest::addColumn<bool>("legacyExists");
+        QTest::addColumn<bool>("currentExists");
+        QTest::newRow("fresh-install") << false << false;
+        QTest::newRow("migrate-previous-install") << true << false;
+        QTest::newRow("preserve-sofafin-settings") << true << true;
+    }
+    void settingsMigration() {
+        QFETCH(bool, legacyExists);
+        QFETCH(bool, currentExists);
+        QTemporaryDir config;
+        QVERIFY(config.isValid());
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, config.path());
+        QString legacyPath;
+        {
+            QSettings legacy(QSettings::IniFormat, QSettings::UserScope, "JF-Gamescope", "client");
+            legacyPath = legacy.fileName();
+            if (legacyExists) {
+                legacy.setValue("deviceId", "legacy-device");
+                legacy.setValue("accessToken", "legacy-token");
+                legacy.setValue("userId", "legacy-user");
+                legacy.setValue("server", "https://example.com/jellyfin");
+                legacy.setValue("uiScale", 1.25);
+                legacy.sync();
+                QCOMPARE(legacy.status(), QSettings::NoError);
+            }
+        }
+        if (currentExists) {
+            QSettings current(QSettings::IniFormat, QSettings::UserScope, "Sofafin", "client");
+            current.setValue("deviceId", "sofafin-device");
+            current.setValue("uiScale", 0.9);
+            current.sync();
+            QCOMPARE(current.status(), QSettings::NoError);
+        }
+        {
+            Settings settings;
+            if (currentExists) {
+                QCOMPARE(settings.value("deviceId").toString(), "sofafin-device");
+                QCOMPARE(settings.uiScale(), 0.9);
+                QVERIFY(settings.value("accessToken").toString().isEmpty());
+            } else if (legacyExists) {
+                QCOMPARE(settings.value("deviceId").toString(), "legacy-device");
+                QCOMPARE(settings.value("accessToken").toString(), "legacy-token");
+                QCOMPARE(settings.value("userId").toString(), "legacy-user");
+                QCOMPARE(settings.value("server").toString(), "https://example.com/jellyfin");
+                QCOMPARE(settings.uiScale(), 1.25);
+                QVERIFY(!QFile::exists(legacyPath));
+            } else {
+                QVERIFY(!settings.value("deviceId").toString().isEmpty());
+                QCOMPARE(settings.uiScale(), 1.0);
+                QVERIFY(settings.value("accessToken").toString().isEmpty());
+            }
+            QSettings current(QSettings::IniFormat, QSettings::UserScope, "Sofafin", "client");
+            QVERIFY(current.fileName().startsWith(config.path() + "/Sofafin/"));
+            if (!currentExists) {
+                const auto permissions = QFile::permissions(current.fileName());
+                QVERIFY(permissions.testFlag(QFile::ReadOwner));
+                QVERIFY(permissions.testFlag(QFile::WriteOwner));
+                QVERIFY(!(permissions & (QFile::ReadGroup | QFile::WriteGroup | QFile::ReadOther | QFile::WriteOther)));
+            }
+            settings.clearSession();
+        }
+        Settings restarted;
+        QVERIFY(restarted.value("accessToken").toString().isEmpty());
+        QVERIFY(restarted.value("userId").toString().isEmpty());
+    }
     void basePaths() {
         QCOMPARE(Playback::endpoint(QUrl("https://example.com/jellyfin/"), "Users/Me").toString(), "https://example.com/jellyfin/Users/Me");
         QVERIFY(Playback::sameOrigin(QUrl("https://example.com/a"), QUrl("https://example.com:443/b")));

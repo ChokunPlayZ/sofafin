@@ -1,14 +1,14 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import JFGamescope 1.0
+import Sofafin 1.0
 
 ApplicationWindow {
     id: window
     width: 1280; height: 800
     minimumWidth: 800; minimumHeight: 500
     visible: true
-    title: "JF Gamescope"
+    title: "Sofafin"
     color: "#101c29"
     readonly property color accent: Preferences.accent
     readonly property real uiFactor: Math.max(1, Math.min(width / 1280, height / 720)) * Preferences.uiScale
@@ -16,6 +16,7 @@ ApplicationWindow {
     readonly property bool gamepad: Controller.name !== "Keyboard"
     property var selectedMedia: ({})
     property var selectedIndices: ({})
+    property string selectedShelfTitle: ""
     property int activeTab: 0
     property alias controlsVisible: playback.controlsVisible
     property bool closingAfterStop: false
@@ -34,18 +35,27 @@ ApplicationWindow {
         if (options.opened || notification.opened || exitPrompt.opened || searchPopup.opened) return
         if (detailView.opened) { detailView.restoreFocus(); return }
         if (libraryGrid.visible) { libraryGrid.focusFirst(); return }
+        let firstShelf = null
         for (let i = 0; i < shelves.count; ++i) {
             let shelf = shelves.itemAt(i)
-            if (shelf && shelf.visible && !shelf.loading) { shelf.focusFirst(); return }
+            if (!shelf || !shelf.visible || shelf.loading) continue
+            if (!firstShelf) firstShelf = shelf
+            if (shelf.title === selectedShelfTitle) { shelf.focusFirst(); return }
         }
+        if (firstShelf) { firstShelf.focusFirst(); return }
         homeButton.forceActiveFocus()
+    }
+    function revealShelf(shelf) {
+        const top = shelf.y + shelfColumn.y
+        if (top < mediaFlick.contentY) mediaFlick.contentY = top
+        else if (top + shelf.height > mediaFlick.contentY + mediaFlick.height)
+            mediaFlick.contentY = top + shelf.height - mediaFlick.height
     }
     function focusShelf(index, direction) {
         for (let i = index + direction; i >= 0 && i < shelves.count; i += direction) {
             let shelf = shelves.itemAt(i)
             if (shelf.visible && !shelf.loading) {
                 shelf.focusFirst()
-                mediaFlick.contentY = Math.max(0, Math.min(mediaFlick.contentHeight - mediaFlick.height, shelf.y - 12))
                 return
             }
         }
@@ -124,7 +134,7 @@ ApplicationWindow {
                 RowLayout {
                     spacing: 12; Layout.bottomMargin: 20
                     Image { source: "qrc:/assets/logo.svg"; Layout.preferredWidth: 40; Layout.preferredHeight: 40 }
-                    Text { text: "JF Gamescope"; color: "#eff6fc"; font.pixelSize: 27; font.weight: Font.DemiBold }
+                    Text { text: "Sofafin"; color: "#eff6fc"; font.pixelSize: 27; font.weight: Font.DemiBold }
                 }
                 Text { text: "Server"; color: "#91aabe"; font.pixelSize: 13 }
                 TextField {
@@ -228,6 +238,7 @@ ApplicationWindow {
                         id: shelves
                         model: App.canFilter ? [] : App.shelves
                         MediaShelf {
+                            id: mediaShelf
                             required property var modelData
                             required property int index
                             objectName: "shelf-" + index
@@ -236,7 +247,13 @@ ApplicationWindow {
                             initialIndex: window.selectedIndices[modelData.title] || 0
                             cardWidth: 156; cardHeight: Math.min(226, Math.max(100, mediaFlick.height - 89))
                             loadArtwork: libraryScreen.visible && y + shelfColumn.y + height >= mediaFlick.contentY && y + shelfColumn.y <= mediaFlick.contentY + mediaFlick.height
-                            onSelected: (media, selectedIndex) => { window.selectedMedia = media; window.selectedIndices[title] = selectedIndex }
+                            onSelected: (media, selectedIndex) => {
+                                if (!activeFocus || !libraryScreen.visible) return
+                                window.selectedShelfTitle = title
+                                window.selectedMedia = media
+                                window.selectedIndices[title] = selectedIndex
+                                window.revealShelf(mediaShelf)
+                            }
                             onActivated: media => window.activate(media)
                             onMoveUp: window.focusShelf(index, -1)
                             onMoveDown: window.focusShelf(index, 1)
@@ -412,7 +429,7 @@ ApplicationWindow {
         background: Rectangle { color: "#15202d"; radius: 8; border.color: "#425263" }
         contentItem: ColumnLayout {
             spacing: 24
-            Text { text: "Exit JF Gamescope?"; color: "white"; font.pixelSize: 24; Layout.fillWidth: true }
+            Text { text: "Exit Sofafin?"; color: "white"; font.pixelSize: 24; Layout.fillWidth: true }
             RowLayout {
                 Layout.fillWidth: true
                 NavButton { id: cancelExit; objectName: "cancelExit"; text: "Cancel"; Layout.fillWidth: true; onClicked: exitPrompt.close() }

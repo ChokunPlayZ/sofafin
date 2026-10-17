@@ -29,7 +29,7 @@ QUrl Playback::resourceUrl(const QUrl &server, const QUrl &resource) {
     return result;
 }
 QJsonObject Playback::deviceProfile(int bitrate) {
-    return {{"Name", "JF Gamescope / libmpv"}, {"MaxStreamingBitrate", bitrate}, {"MaxStaticBitrate", 1000000000},
+    return {{"Name", "Sofafin / libmpv"}, {"MaxStreamingBitrate", bitrate}, {"MaxStaticBitrate", 1000000000},
         {"DirectPlayProfiles", QJsonArray{QJsonObject{{"Type", "Video"},
             {"Container", "mkv,mp4,m4v,mov,avi,ts,mpegts,m2ts,webm,mpg,mpeg,ogv"},
             {"VideoCodec", "h264,hevc,av1,vp8,vp9,mpeg2video,mpeg4,vc1,theora"},

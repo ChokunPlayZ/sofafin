@@ -10,9 +10,9 @@
 // Credentials come only from the caller's environment; responses and URLs are never printed.
 int main(int argc, char **argv) {
     QCoreApplication app(argc, argv);
-    const QString server = qEnvironmentVariable("JF_SERVER"), username = qEnvironmentVariable("JF_USERNAME"), password = qEnvironmentVariable("JF_PASSWORD");
+    const QString server = qEnvironmentVariable("SOFAFIN_SERVER"), username = qEnvironmentVariable("SOFAFIN_USERNAME"), password = qEnvironmentVariable("SOFAFIN_PASSWORD");
     if (server.isEmpty() || username.isEmpty() || password.isEmpty()) {
-        std::fprintf(stderr, "Set JF_SERVER, JF_USERNAME and JF_PASSWORD, then run jf-live-check. Requires mpv on PATH.\n"); return 2;
+        std::fprintf(stderr, "Set SOFAFIN_SERVER, SOFAFIN_USERNAME and SOFAFIN_PASSWORD, then run sofafin-live-check. Requires mpv on PATH.\n"); return 2;
     }
     JellyfinClient api(QUuid::createUuid().toString(QUuid::WithoutBraces)); api.configure(QUrl(server));
     QProcess decoder;

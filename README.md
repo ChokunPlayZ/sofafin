@@ -1,4 +1,4 @@
-# JF Gamescope
+# Sofafin
 
 A native, controller-first Jellyfin client for Steam Deck, with a Steam Big Picture-inspired interface. C++20, Qt 6 Quick, SDL2 input, and embedded libmpv video. Qt renders the interface directly; there is no browser or webview.
 
@@ -6,7 +6,7 @@ This is an early working foundation. Automated usability checks run against a re
 
 ## Build and run
 
-Requires CMake 3.22+, a C++20 compiler, Qt 6.5+ (Quick, Quick Controls 2, Network, OpenGL, Test), SDL 2.0.14+, and libmpv client API 2.0+. `ffmpeg` generates the local playback test fixture; the `mpv` executable is used by the optional live server check.
+Requires CMake 3.22+, a C++20 compiler, Qt 6.5+ (Quick, Quick Controls 2, Network, OpenGL, D-Bus, Test), SDL 2.0.14+, and libmpv client API 2.0+. `ffmpeg` generates the local playback test fixture; the `mpv` executable is used by the optional live server check. Linux tests also use `dbus-run-session` (`dbus` on Arch/CachyOS; `dbus-daemon` on Debian/Ubuntu).
 
 Linux playback startup tests also require the libavutil development headers (`ffmpeg` on Arch/CachyOS; `libavutil-dev` on Debian/Ubuntu) and FFmpeg's `libx264` encoder.
 
@@ -15,17 +15,17 @@ On Arch/CachyOS, the development packages are `base-devel cmake ninja qt6-base q
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j 4
-./build/jf-gamescope --windowed
+./build/sofafin --windowed
 ```
 
 Enter the server's full base URL, username, and password. Press A in an input field, tap the field, or press F2 to open Steam’s on-screen keyboard. Steam must be running; add the app to Steam for Gaming Mode. The keyboard types directly into the focused field, including masked password fields. A physical keyboard also works, and Enter advances or submits the field.
 
-For Steam Gaming Mode, add the built `jf-gamescope` executable as a non-Steam game, use `--fullscreen` in its launch options, and select a normal **Gamepad** Steam Input template. If Qt selects the wrong display platform, use `QT_QPA_PLATFORM=xcb %command% --fullscreen` as the Steam launch options.
+For Steam Gaming Mode, add the built `sofafin` executable as a non-Steam game, use `--fullscreen` in its launch options, and select a normal **Gamepad** Steam Input template. If Qt selects the wrong display platform, use `QT_QPA_PLATFORM=xcb %command% --fullscreen` as the Steam launch options.
 
 For nested gamescope on a Linux desktop:
 
 ```sh
-gamescope -w 1280 -h 800 -W 1280 -H 800 -f -- env QT_QPA_PLATFORM=xcb ./build/jf-gamescope --fullscreen
+gamescope -w 1280 -h 800 -W 1280 -H 800 -f -- env QT_QPA_PLATFORM=xcb ./build/sofafin --fullscreen
 ```
 
 Installation is optional: `cmake --install build --prefix ~/.local` installs the executable, desktop entry, and icon. This does not bundle runtime libraries. SteamOS packaging (Flatpak/AppImage) is still pending; avoid modifying the Deck's read-only system to install development packages.
@@ -78,9 +78,11 @@ Direct play is preferred across the media versions Jellyfin returns. Direct-only
 
 Video playback continuously prefetches up to an hour ahead, limited to 1 GiB of forward cache plus 256 MiB for cached backward seeks. Memory is used as data arrives. Startup, seeks, and underruns target five seconds of buffered media before resuming, or less when the cache fills or the stream ends. The buffering indicator appears immediately when a seek is committed and stays until playback is ready; network streams also show the current download speed when available. Exiting playback resets the timeline and track labels, and a new title opens on black until its first frame is ready.
 
+Video playback requests [standard idle inhibition](https://specifications.freedesktop.org/idle-inhibit/0.1/) through `org.freedesktop.ScreenSaver` to keep the screensaver and idle dimming off. This stays active during loading, buffering, and seeking, and is released on pause, stop, playback ending or failing, or exit. Background theme songs do not hold it. Missing or restarting services are retried without interrupting playback. Gaming Mode requires Steam's [media-app inhibition support](https://store.steampowered.com/news/app/1675200/view/675134162359815513), included in the October 13, 2026 client update.
+
 On Linux, hardware decoding tries VA-API and NVDEC, with software fallback when neither is available. Vulkan decoding is excluded: mpv's automatic probing can abort inside Steam/Gamescope's injected Vulkan WSI layer at playback startup. Older mpv versions that only accept one decoder use `vaapi-copy` with software fallback. The application does not change Steam's overlay or global graphics settings.
 
-Authentication and stream negotiation use Qt Network with verified TLS and same-origin API redirects. Playback and external subtitle URLs are restricted to the server's origin. Passwords are never saved. If **Keep me signed in** is selected, the access token is stored in the user's `JF-Gamescope/client.ini` settings file with owner-only permissions; it is not encrypted. Sign out clears that token and ends the server session. Treat media URLs containing tokens as credentials when sharing logs.
+Authentication and stream negotiation use Qt Network with verified TLS and same-origin API redirects. Playback and external subtitle URLs are restricted to the server's origin. Passwords are never saved. If **Keep me signed in** is selected, the access token is stored in the user's `Sofafin/client.ini` settings file with owner-only permissions; it is not encrypted. Existing settings migrate automatically on first launch when no Sofafin settings exist, preserving preferences, the device ID, and remembered sessions. Sign out clears that token and ends the server session. Treat media URLs containing tokens as credentials when sharing logs.
 
 ## Validation
 
@@ -92,24 +94,26 @@ Tests cover playback policy, media-version selection, base paths, token handling
 
 The Linux `playback-startup` regression test starts and restarts an H.264 clip with hardware decoding enabled. A test-only libavutil guard makes hardware devices unavailable and terminates the child if it probes Vulkan, verifying software fallback without requiring a GPU or Gamescope. The old automatic decoder policy fails this test.
 
+The `screensaver` regression test uses a private D-Bus session and a fake screensaver service to verify playback inhibition, pause/resume/stop/end/error cleanup, delayed replies, service reconnection, and shutdown without changing the desktop's idle settings.
+
 To exercise a real server, provide a disposable account through environment variables. The checker authenticates, browses libraries, negotiates direct play and forced transcoding, and asks mpv to decode a short sample in each mode (up to 30 frames). It requires at least one accessible movie/episode and server permission to transcode. Credentials and playback URLs are not printed.
 
 ```sh
-export JF_SERVER='https://your-server.example'
-read -r -p 'Username: ' JF_USERNAME
-read -r -s -p 'Password: ' JF_PASSWORD
-export JF_USERNAME JF_PASSWORD
-./build/jf-live-check
-unset JF_SERVER JF_USERNAME JF_PASSWORD
+export SOFAFIN_SERVER='https://your-server.example'
+read -r -p 'Username: ' SOFAFIN_USERNAME
+read -r -s -p 'Password: ' SOFAFIN_PASSWORD
+export SOFAFIN_USERNAME SOFAFIN_PASSWORD
+./build/sofafin-live-check
+unset SOFAFIN_SERVER SOFAFIN_USERNAME SOFAFIN_PASSWORD
 ```
 
-The opt-in native usability runner signs in through the UI, browses the real libraries, filters/sorts/paginates, navigates series and episodes, checks favorite round-trips, decodes direct and transcoded video, changes subtitles, previews stick/pointer seeks with trickplay, and checks scale settings and screenshots. It uses isolated settings and signs out afterward. Playback reporting updates the disposable account's watch progress. Set `JF_SCREENSHOT_DIR` to save full-resolution screenshots; `JF_THEME_TEST_TITLE` optionally selects a known series with a theme for a continuity assertion.
+The opt-in native usability runner signs in through the UI, browses the real libraries, filters/sorts/paginates, navigates series and episodes, checks favorite round-trips, decodes direct and transcoded video, changes subtitles, previews stick/pointer seeks with trickplay, and checks scale settings and screenshots. It uses isolated settings and signs out afterward. Playback reporting updates the disposable account's watch progress. Set `SOFAFIN_SCREENSHOT_DIR` to save full-resolution screenshots; `SOFAFIN_THEME_TEST_TITLE` optionally selects a known series with a theme for a continuity assertion.
 
 ```sh
-# Uses JF_SERVER, JF_USERNAME and JF_PASSWORD from the environment.
-JF_TEST_HEIGHT=1080 ./build/jf-live-ui-tests
-JF_TEST_HEIGHT=1440 ./build/jf-live-ui-tests
-JF_TEST_HEIGHT=2160 ./build/jf-live-ui-tests
+# Uses SOFAFIN_SERVER, SOFAFIN_USERNAME and SOFAFIN_PASSWORD from the environment.
+SOFAFIN_TEST_HEIGHT=1080 ./build/sofafin-live-ui-tests
+SOFAFIN_TEST_HEIGHT=1440 ./build/sofafin-live-ui-tests
+SOFAFIN_TEST_HEIGHT=2160 ./build/sofafin-live-ui-tests
 ```
 
 The runner configures Qt's virtual screen and window to the selected 16:9 resolution at DPR 1; it does not resize a low-resolution screenshot. UI rendering uses Qt's software backend and video decoding uses libmpv's software render API. Physical gamepad/Steam overlay, audio output, and native GPU presentation remain hardware checks. See [the usability report](docs/usability-2026-10-17.md).
@@ -118,7 +122,7 @@ For a headless screenshot of the sign-in screen:
 
 ```sh
 QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software \
-  ./build/jf-gamescope --windowed --smoke-test --screenshot /tmp/jf-gamescope.png
+  ./build/sofafin --windowed --smoke-test --screenshot /tmp/sofafin.png
 ```
 
 Known limits: no Quick Connect, HDR certification, or bundled distribution yet. The actual Steam keyboard overlay, OpenGL surface, hardware decoding, Gamescope integration, and physical controller mappings require hardware validation. Live TV, music, and playlists are deferred in [BACKLOG.md](BACKLOG.md); downloads are out of scope.
