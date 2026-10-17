@@ -1,0 +1,40 @@
+name: Bug report
+description: Report a reproducible Sofafin problem
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For vulnerabilities, follow SECURITY.md. Never include passwords, tokens,
+        authenticated media URLs, or client.ini. Use a disposable account for live tests.
+  - type: input
+    id: version
+    attributes:
+      label: Sofafin version or commit
+      description: Include whether this is a source build or downstream package.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Distro, desktop/Gaming Mode, GPU/driver, controller, display, Qt/libmpv, Jellyfin version.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include playback mode and non-sensitive codec/container details for playback problems.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized logs or screenshots
+      description: Redact credentials, token-bearing URLs, private server/account details, and personal library information.

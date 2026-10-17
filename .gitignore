@@ -1,3 +1,9 @@
 /build*/
 /.cache/
 *.user
+/dist/
+/CMakeUserPresets.json
+.env
+.env.*
+!.env.example
+__pycache__/

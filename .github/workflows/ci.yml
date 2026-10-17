@@ -1,0 +1,95 @@
+name: Build and validate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux / ${{ matrix.build_type }}
+    runs-on: ubuntu-24.04
+    container: debian:13
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Debug, Release]
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates git build-essential cmake ninja-build pkg-config python3 \
+            qt6-base-dev qt6-declarative-dev libqt6opengl6-dev libqt6svg6 \
+            qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtquick-controls \
+            qml6-module-qtquick-layouts qml6-module-qtquick-templates \
+            qml6-module-qtqml-workerscript libsdl2-dev libmpv-dev libavutil-dev \
+            ffmpeg mpv dbus-daemon fonts-dejavu-core desktop-file-utils
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Check documentation and desktop entry
+        run: |
+          python3 scripts/check-docs.py
+          desktop-file-validate packaging/moe.ckl.sofafin.desktop
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          -DCMAKE_INSTALL_PREFIX=/usr -DBUILD_TESTING=ON
+      - name: Build
+        run: cmake --build build --parallel 2
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --output-junit test-results.xml
+      - name: Check staged installation
+        run: |
+          DESTDIR="$PWD/build/stage" cmake --install build
+          test -x build/stage/usr/bin/sofafin
+          test -f build/stage/usr/share/icons/hicolor/scalable/apps/moe.ckl.sofafin.svg
+          desktop-file-validate build/stage/usr/share/applications/moe.ckl.sofafin.desktop
+          python3 scripts/check-docs.py --root build/stage/usr/share/doc/Sofafin
+          QT_QPA_PLATFORM=offscreen build/stage/usr/bin/sofafin --version
+          QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software XDG_CONFIG_HOME="$PWD/build/staged-config" \
+            build/stage/usr/bin/sofafin --windowed --smoke-test
+      - name: Package and rebuild source without Git
+        if: matrix.build_type == 'Release'
+        run: |
+          python3 scripts/package-source.py
+          cd dist
+          sha256sum --check ./*.sha256
+          tar -xzf sofafin-*.tar.gz
+          cd sofafin-*/
+          python3 scripts/check-docs.py
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+          cmake --build build --parallel 2
+          QT_QPA_PLATFORM=offscreen ./build/sofafin --version
+      - name: Save test results
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: linux-${{ matrix.build_type }}-test-results
+          path: |
+            build/test-results.xml
+            build/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Save source snapshot
+        if: matrix.build_type == 'Release'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: source-snapshot
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14
