@@ -1374,6 +1374,27 @@ private slots:
         QTRY_VERIFY(!m_player->active()); QVERIFY(!prompt->property("visible").toBool());
         QVERIFY(!object("playbackView")->property("visible").toBool());
     }
+    void stopConfirmationStaysCentered_data() {
+        QTest::addColumn<QSize>("windowSize"); QTest::addColumn<double>("uiScale");
+        QTest::newRow("deck") << QSize(1280, 800) << 1.0;
+        QTest::newRow("small") << QSize(800, 500) << 1.0;
+        QTest::newRow("large") << QSize(1920, 1080) << 1.0;
+        QTest::newRow("small-ui") << QSize(1280, 800) << 0.75;
+        QTest::newRow("large-ui") << QSize(1280, 800) << 1.5;
+    }
+    void stopConfirmationStaysCentered() {
+        QFETCH(QSize, windowSize); QFETCH(double, uiScale);
+        m_window->resize(windowSize); m_settings->setUiScale(uiScale);
+        auto *prompt = object("stopPlaybackPrompt"); QVERIFY(prompt);
+        QVERIFY(QMetaObject::invokeMethod(prompt, "open"));
+        QTRY_VERIFY(prompt->property("opened").toBool());
+        auto *content = prompt->property("contentItem").value<QQuickItem *>(); QVERIFY(content);
+        auto *panel = content->parentItem(); QVERIFY(panel);
+        const auto center = [&] { return panel->mapToScene(panel->boundingRect().center()); };
+        QTRY_VERIFY2(QLineF(center(), QPointF(m_window->width() / 2.0, m_window->height() / 2.0)).length() <= 1,
+            qPrintable(QString("Dialog center (%1, %2), window center (%3, %4)")
+                .arg(center().x()).arg(center().y()).arg(m_window->width() / 2.0).arg(m_window->height() / 2.0)));
+    }
     void stopConfirmationPausesStreamThatFinishesLoading() {
         QVERIFY(signIn());
         const auto item = m_app->shelves().first().toMap()["items"].toList().first().toMap();

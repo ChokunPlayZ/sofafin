@@ -333,8 +333,8 @@ FocusScope {
         objectName: "stopPlaybackPrompt"
         property bool resumeAfterClose: false
         parent: Overlay.overlay
-        width: Math.min(440, parent.width - 48); height: stopColumn.implicitHeight + 48
-        x: (parent.width - width) / 2; y: (parent.height - height) / 2
+        width: Math.min(440, playback.width - 48); height: stopColumn.implicitHeight + 48
+        x: (playback.width - width) / 2; y: (playback.height - height) / 2
         modal: true; focus: true; padding: 24; closePolicy: Popup.CloseOnEscape
         onOpened: {
             resumeAfterClose = Player.active && !Player.paused
