@@ -34,7 +34,7 @@ Installation is optional: `cmake --install build --prefix ~/.local` installs the
 
 | Controller | Keyboard | Action |
 | --- | --- | --- |
-| D-pad / left stick | Arrow keys | Move focus; seek ±10 seconds from the video, or preview a seek on the timeline |
+| D-pad / left stick | Arrow keys | Move focus; preview a seek from the video or timeline |
 | A | Enter / F2 | Select; A or F2 opens Steam keyboard in a field; pause in the player |
 | B | Escape | Back; close a dialog; hide player controls, then stop; prompt to exit on Home |
 | X | Space | Pause in the player |
@@ -47,7 +47,7 @@ Titles open on a full-screen detail page with backdrop artwork. Each season appe
 
 Theme songs supplied by the server play on detail pages, including inherited series themes for episodes. Adjust **Settings → Theme volume** from 0–100% with Left/Right or the slider; the saved level applies immediately and defaults to 70%. The same theme continues while moving between a series, its seasons, and its episodes. Themes stop when leaving title details or starting video and do not create video playback sessions. Disable them in **Settings → Theme songs**. Missing themes are ignored.
 
-Press Down in the player to select the playhead. Move the left stick to preview a seek: a small deflection moves slowly, a full deflection moves faster, and holding it accelerates. Press A / Enter to commit or B / Escape to cancel. Trickplay thumbnails appear when supplied by the server. Pointer dragging seeks on release. Press Down again to reach pause, playback settings, and stop. Playback settings groups quality, audio, subtitles, and media info. Title details also has an expandable playback settings row for choosing options before playing; cast and chapters expand separately. Up from the timeline, or B outside a seek preview, hides the player controls; B again stops playback. After ten seconds paused without input, the video dims and shows the title and episode. The controller can be disconnected and reconnected without restarting.
+Move the left stick horizontally in the player to open the playhead and preview a seek, even when controls are hidden: a small deflection moves slowly, a full deflection moves faster, and holding it accelerates. Left/Right on the D-pad or keyboard also opens a seek preview. Press A / Enter to commit or B / Escape to cancel. Trickplay thumbnails appear when supplied by the server. Pointer dragging seeks on release. Down selects the playhead; Down again reaches pause, playback settings, and stop. Playback settings groups quality, audio, subtitles, and media info. Title details also has an expandable playback settings row for choosing options before playing; cast and chapters expand separately. Up from the timeline, or B outside a seek preview, hides the player controls; B again stops playback. After ten seconds paused without input, the video dims and shows the title and episode. The controller can be disconnected and reconnected without restarting.
 
 The interface scales automatically for the display resolution. **Settings → UI scale** adjusts the entire interface from 75–150% in 5% steps with Left/Right. This includes text, controls, dialogs, and artwork; settings remain scrollable at larger scales. Automatic audio and subtitle choices name the track being used. Shelf, season, detail, and artwork placeholders show skeletons while data loads, and remembered sessions show a loading screen until authentication completes.
 

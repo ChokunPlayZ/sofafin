@@ -20,6 +20,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <mpv/render.h>
 
 class NativeTests : public QObject {
@@ -858,6 +859,56 @@ private slots:
         m_app->start(); QVERIFY(m_app->authenticating());
         QTRY_VERIFY(!m_app->authenticating());
         QVERIFY(!m_app->signedIn()); QVERIFY(object("loginScreen")->property("visible").toBool());
+    }
+    void firstHorizontalInputUsesSeekPreview_data() {
+        QTest::addColumn<int>("axis");
+        QTest::addColumn<int>("key");
+        QTest::addColumn<bool>("hidden");
+        QTest::newRow("small-stick-right") << 12000 << 0 << false;
+        QTest::newRow("full-stick-right") << 30000 << 0 << false;
+        QTest::newRow("small-stick-left-hidden") << -12000 << 0 << true;
+        QTest::newRow("full-stick-left-hidden") << -30000 << 0 << true;
+        QTest::newRow("right-key") << 0 << int(Qt::Key_Right) << false;
+        QTest::newRow("left-key-hidden") << 0 << int(Qt::Key_Left) << true;
+    }
+    void firstHorizontalInputUsesSeekPreview() {
+        QFETCH(int, axis); QFETCH(int, key); QFETCH(bool, hidden);
+        QVERIFY(signIn());
+        const int index = SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_GAMECONTROLLER, SDL_CONTROLLER_AXIS_MAX, SDL_CONTROLLER_BUTTON_MAX, 0);
+        QVERIFY(index >= 0);
+        auto *stick = SDL_JoystickOpen(index); QVERIFY(stick);
+        const auto releaseStick = qScopeGuard([&] { SDL_JoystickClose(stick); SDL_JoystickDetachVirtual(index); });
+        QTRY_VERIFY(m_input->name() != "Keyboard");
+        const auto item = m_app->shelves().first().toMap()["items"].toList().first().toMap();
+        m_app->play(item, true, {{"quality", 8000000}});
+        QTRY_VERIFY(m_player->active());
+        auto *view = qobject_cast<QQuickItem *>(object("playbackView")); QVERIFY(view);
+        auto *bar = object("playerSeekBar"); QVERIFY(bar);
+        QTRY_COMPARE(m_window->activeFocusItem(), view);
+        if (hidden) {
+            QTest::keyClick(m_window, Qt::Key_Up);
+            QVERIFY(!object("playerOverlay")->property("visible").toBool());
+        }
+        const double position = m_player->position();
+        QVERIFY(position > 0);
+        const auto requestsBefore = m_network->requests.size();
+        if (axis) QCOMPARE(SDL_JoystickSetVirtualAxis(stick, SDL_CONTROLLER_AXIS_LEFTX, axis), 0);
+        else QTest::keyClick(m_window, Qt::Key(key));
+        QTRY_VERIFY(bar->property("activeFocus").toBool());
+        QTRY_VERIFY(bar->property("seeking").toBool());
+        const bool backwards = axis < 0 || key == Qt::Key_Left;
+        QTRY_VERIFY(backwards ? bar->property("previewPosition").toDouble() < position
+                             : bar->property("previewPosition").toDouble() > position);
+        QTest::qWait(450); // Holding the first movement must not trigger the old repeated seek path.
+        QCOMPARE(SDL_JoystickSetVirtualAxis(stick, SDL_CONTROLLER_AXIS_LEFTX, 0), 0);
+        QTRY_COMPARE(m_input->horizontalAxis(), 0.0);
+        QVERIFY(object("playerOverlay")->property("visible").toBool());
+        QCOMPARE(m_player->position(), position);
+        QCOMPARE(m_network->requests.size(), requestsBefore);
+        QTest::keyClick(m_window, Qt::Key_Escape);
+        QVERIFY(!bar->property("seeking").toBool());
+        QCOMPARE(m_player->position(), position);
+        m_app->stopPlayback();
     }
     void analogTimelinePreviewsAcceleratesAndCommitsOnce() {
         QVERIFY(signIn()); m_window->resize(1920, 1080);
