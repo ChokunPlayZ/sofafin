@@ -17,10 +17,23 @@ FocusScope {
     readonly property real position: seeking ? previewPosition : Player.position
     readonly property real fraction: Player.duration > 0 ? Math.max(0, Math.min(1, position / Player.duration)) : 0
     readonly property var frame: seeking ? App.trickplayFrame(previewPosition) : ({})
+    readonly property var chapters: Player.duration > 0 ? (App.currentItem.chapters || [])
+        .filter(chapter => Number.isFinite(chapter.ticks) && chapter.ticks >= 0 && chapter.ticks / 10000000 < Player.duration)
+        .sort((a, b) => a.ticks - b.ticks) : []
+    readonly property var segments: Player.duration > 0 ? App.mediaSegments
+        .filter(segment => segment.start < Player.duration) : []
+    readonly property var segmentTypes: [...new Set(segments.map(segment => segment.type))]
+    readonly property string contextLabel: {
+        let chapterName = ""
+        for (let i = 0; i < chapters.length && chapters[i].ticks / 10000000 <= position; ++i)
+            chapterName = chapters[i].name || "Chapter " + (i + 1)
+        const segment = segments.find(segment => position >= segment.start && position < segment.end)
+        return [chapterName, segment ? segmentName(segment.type) : ""].filter(Boolean).join(" · ")
+    }
     signal activity()
     signal moveUp()
     signal moveDown()
-    implicitHeight: 36
+    implicitHeight: markerLegend.visible ? 40 + markerLegend.implicitHeight : 36
     activeFocusOnTab: true
     enabled: Player.active && Player.duration > 0 && !App.playbackPending
     Accessible.role: Accessible.Slider
@@ -36,6 +49,12 @@ FocusScope {
     function time(seconds) {
         const s = Math.max(0, Math.floor(seconds))
         return Math.floor(s / 60) + ":" + (s % 60 < 10 ? "0" : "") + s % 60
+    }
+    function segmentName(type) {
+        return ({Intro: "Intro", Outro: "Credits", Recap: "Recap", Preview: "Preview", Commercial: "Commercial"})[type] || type
+    }
+    function segmentColor(type) {
+        return ({Intro: "#f2c66d", Outro: "#ba9cf5", Recap: "#68d4bb", Preview: "#ed9bc4", Commercial: "#f59a73"})[type] || "#c3d7e4"
     }
     function begin() {
         if (!enabled || seeking) return
@@ -79,14 +98,64 @@ FocusScope {
             seek.nudge(sign * seek.speed * dt)
         }
     }
-    Rectangle {
-        anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter }
-        height: seek.activeFocus ? 8 : 5; radius: height / 2; color: "#454b53"
-        Rectangle { objectName: "bufferProgress"; height: parent.height; radius: parent.radius; width: parent.width * Math.min(1, Player.duration > 0 ? Player.bufferedPosition / Player.duration : 0); color: "#9ba8b4" }
-        Rectangle { height: parent.height; radius: parent.radius; width: parent.width * seek.fraction; color: seek.accent }
+    Item {
+        id: track
+        objectName: "timelineTrack"
+        width: parent.width; height: seek.activeFocus ? 8 : 5; y: 18 - height / 2
+        Rectangle { anchors.fill: parent; radius: height / 2; color: "#454b53" }
+        Rectangle { objectName: "bufferProgress"; height: parent.height; radius: height / 2; width: parent.width * Math.min(1, Player.duration > 0 ? Player.bufferedPosition / Player.duration : 0); color: "#9ba8b4" }
+        Rectangle { height: parent.height; radius: height / 2; width: parent.width * seek.fraction; color: seek.accent }
+        Repeater {
+            model: seek.segments
+            delegate: Rectangle {
+                required property var modelData
+                required property int index
+                objectName: "timelineSegment-" + index
+                x: track.width * modelData.start / Player.duration
+                width: track.width * (Math.min(Player.duration, modelData.end) - modelData.start) / Player.duration
+                height: track.height; radius: 2
+                color: seek.segmentColor(modelData.type)
+                Accessible.role: Accessible.StaticText
+                Accessible.name: seek.segmentName(modelData.type) + ": " + seek.time(modelData.start) + " to " + seek.time(Math.min(Player.duration, modelData.end))
+            }
+        }
+        Repeater {
+            model: seek.chapters
+            delegate: Rectangle {
+                required property var modelData
+                required property int index
+                objectName: "timelineChapter-" + index
+                x: Math.max(0, Math.min(track.width - width, track.width * modelData.ticks / 10000000 / Player.duration - width / 2))
+                anchors.verticalCenter: parent.verticalCenter
+                width: 3; height: track.height + 6; radius: 1
+                color: "#edf5fb"; border.color: "#15202d"; border.width: 0.5
+                Accessible.role: Accessible.StaticText
+                Accessible.name: (modelData.name || "Chapter " + (index + 1)) + ": " + seek.time(modelData.ticks / 10000000)
+            }
+        }
+    }
+    Flow {
+        id: markerLegend
+        objectName: "timelineLegend"
+        y: 36; width: parent.width; spacing: 12
+        visible: seek.chapters.length > 0 || seek.segments.length > 0
+        Row {
+            visible: seek.chapters.length > 0; spacing: 6
+            Rectangle { width: 3; height: 10; color: "#edf5fb"; anchors.verticalCenter: parent.verticalCenter }
+            Text { text: "Chapters"; color: "#c3d7e4"; font.pixelSize: 12 }
+        }
+        Repeater {
+            model: seek.segmentTypes
+            delegate: Row {
+                required property string modelData
+                spacing: 6
+                Rectangle { width: 12; height: 5; radius: 2; color: seek.segmentColor(modelData); anchors.verticalCenter: parent.verticalCenter }
+                Text { text: seek.segmentName(modelData); color: "#c3d7e4"; font.pixelSize: 12 }
+            }
+        }
     }
     Rectangle {
-        x: Math.max(0, Math.min(parent.width - width, parent.width * seek.fraction - width / 2)); anchors.verticalCenter: parent.verticalCenter
+        x: Math.max(0, Math.min(parent.width - width, parent.width * seek.fraction - width / 2)); y: 18 - height / 2
         width: seek.activeFocus ? 22 : 12; height: width; radius: width / 2
         color: seek.accent; border.color: "white"; border.width: seek.activeFocus ? 3 : 0
     }
@@ -116,9 +185,12 @@ FocusScope {
         }
         Text {
             id: label
+            objectName: "seekPreviewLabel"
             anchors { left: parent.left; right: parent.right; bottom: parent.bottom; margins: 8 }
             horizontalAlignment: Text.AlignHCenter
-            text: seek.time(seek.previewPosition) + (seek.speed > 0 ? "  ·  " + Math.round(seek.speed) + "s / sec" : "") + "\nSelect to play · Back to cancel"
+            text: seek.time(seek.previewPosition) + (seek.speed > 0 ? "  ·  " + Math.round(seek.speed) + "s / sec" : "")
+                + (seek.contextLabel ? "\n" + seek.contextLabel : "") + "\nSelect to play · Back to cancel"
+            maximumLineCount: 3; elide: Text.ElideRight
             color: "white"; font.pixelSize: 16
         }
     }

@@ -1,5 +1,6 @@
 #include "Playback.h"
 #include <QJsonArray>
+#include <QRegularExpression>
 #include <QUrlQuery>
 #include <algorithm>
 #include <cmath>
@@ -154,6 +155,42 @@ QVariantList Playback::segments(const QJsonObject &response) {
     std::stable_sort(result.begin(), result.end(), [](const QVariant &a, const QVariant &b) {
         return a.toMap().value("start").toDouble() < b.toMap().value("start").toDouble();
     });
+    return result;
+}
+QVariantList Playback::chapterSegments(const QVariantList &chapters, double duration) {
+    if (!std::isfinite(duration) || duration <= 0) return {};
+    QVariantList ordered;
+    for (const auto &value : chapters) {
+        bool valid = false;
+        const double ticks = value.toMap().value("ticks").toDouble(&valid);
+        if (valid && std::isfinite(ticks) && ticks >= 0 && ticks / 10000000 < duration) ordered.append(value);
+    }
+    std::stable_sort(ordered.begin(), ordered.end(), [](const QVariant &a, const QVariant &b) {
+        return a.toMap().value("ticks").toDouble() < b.toMap().value("ticks").toDouble();
+    });
+    static const QList<QPair<QRegularExpression, QString>> types{
+        {QRegularExpression("^(intro|opening|opening credits|op)(?:\\s*\\d+)?$"), "Intro"},
+        {QRegularExpression("^(outro|ending|closing credits|end credits|ending credits|credits|ed)(?:\\s*\\d+)?$"), "Outro"},
+        {QRegularExpression("^(recap|recapitulation|previously|previously on)$"), "Recap"},
+        {QRegularExpression("^(preview|episode preview|next episode|next time)$"), "Preview"},
+        {QRegularExpression("^(commercials?|advertisements?|ads)$"), "Commercial"}};
+    QVariantList result;
+    for (qsizetype i = 0; i < ordered.size(); ++i) {
+        const auto chapter = ordered[i].toMap();
+        const auto name = chapter.value("name").toString().simplified().toCaseFolded();
+        QString type;
+        for (const auto &entry : types) {
+            if (entry.first.match(name).hasMatch()) { type = entry.second; break; }
+        }
+        if (type.isEmpty()) continue;
+        const double start = chapter.value("ticks").toDouble() / 10000000;
+        double end = duration;
+        for (qsizetype j = i + 1; j < ordered.size(); ++j) {
+            const double next = ordered[j].toMap().value("ticks").toDouble() / 10000000;
+            if (next > start) { end = next; break; }
+        }
+        result.append(QVariantMap{{"start", start}, {"end", end}, {"type", type}, {"source", "chapters"}});
+    }
     return result;
 }
 QVariantMap Playback::activeSegment(const QVariantList &segments, double position) {

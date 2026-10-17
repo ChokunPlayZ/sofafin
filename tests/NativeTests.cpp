@@ -760,6 +760,204 @@ private slots:
         QVERIFY(m_app->message().isEmpty()); QVERIFY(m_app->mediaSegments().isEmpty());
         m_app->stopPlayback();
     }
+    void timelineChaptersAndSegments_data() {
+        QTest::addColumn<QSize>("windowSize");
+        QTest::newRow("compact") << QSize(800, 500);
+        QTest::newRow("deck") << QSize(1280, 800);
+        QTest::newRow("desktop") << QSize(1920, 1080);
+    }
+    void timelineChaptersAndSegments() {
+        QFETCH(QSize, windowSize);
+        QVERIFY(signIn()); m_window->resize(windowSize);
+        const auto original = m_network->respond;
+        m_network->respond = [original](const FixtureRequest &request) {
+            const auto path = request.request.url().path();
+            if (path.contains("MediaSegments/")) return FixtureResponse{R"({"Items":[
+                {"Type":"Recap","StartTicks":0,"EndTicks":100000000},
+                {"Type":"Intro","StartTicks":100000000,"EndTicks":300000000},
+                {"Type":"Intro","StartTicks":500000000,"EndTicks":550000000},
+                {"Type":"Outro","StartTicks":1100000000,"EndTicks":1600000000},
+                {"Type":"Preview","StartTicks":1300000000,"EndTicks":1400000000}]})"};
+            if (path.endsWith("/Items/movie-0")) return FixtureResponse{R"({"Id":"movie-0","Chapters":[
+                {"Name":"Finale","StartPositionTicks":600000000},
+                {"Name":"Opening","StartPositionTicks":0},
+                {"Name":"Middle","StartPositionTicks":300000000},
+                {"Name":"Invalid","StartPositionTicks":-1},
+                {"Name":"Outside runtime","StartPositionTicks":1500000000},
+                {"Name":"Missing position"}]})", 200, 20};
+            return original(request);
+        };
+        auto item = m_app->shelves().first().toMap()["items"].toList().first().toMap();
+        item["runtime"] = 120;
+        QVERIFY(item["chapters"].toList().isEmpty());
+        m_app->play(item, false, {{"quality", 8000000}});
+        QTRY_VERIFY(m_player->active());
+        QTRY_VERIFY(object("timelineChapter-2"));
+        QVERIFY(!object("timelineChapter-3"));
+        QVERIFY(object("timelineSegment-3")); QVERIFY(!object("timelineSegment-4"));
+        auto *bar = qobject_cast<QQuickItem *>(object("playerSeekBar")); QVERIFY(bar);
+        auto *track = qobject_cast<QQuickItem *>(object("timelineTrack")); QVERIFY(track);
+        auto *middle = qobject_cast<QQuickItem *>(object("timelineChapter-1")); QVERIFY(middle);
+        auto *intro = qobject_cast<QQuickItem *>(object("timelineSegment-1")); QVERIFY(intro);
+        auto *credits = qobject_cast<QQuickItem *>(object("timelineSegment-3")); QVERIFY(credits);
+        QTRY_VERIFY(track->width() > 0);
+        QVERIFY(qAbs(middle->x() + middle->width() / 2 - track->width() / 4) < 0.01);
+        QVERIFY(qAbs(intro->x() - track->width() / 12) < 0.01);
+        QVERIFY(qAbs(intro->width() - track->width() / 6) < 0.01);
+        QVERIFY(qAbs(credits->x() + credits->width() - track->width()) < 0.01);
+        QVERIFY(intro->property("color") != credits->property("color"));
+        auto *legend = qobject_cast<QQuickItem *>(object("timelineLegend")); QVERIFY(legend);
+        QVERIFY(legend->isVisible());
+        QTRY_VERIFY(legend->height() > 0);
+        QVERIFY(legend->y() + legend->height() <= bar->height());
+        bool requestedChapters = false;
+        for (const auto &request : m_network->requests) {
+            if (request.request.url().path() != "/base/Items/movie-0") continue;
+            requestedChapters = request.operation == QNetworkAccessManager::GetOperation &&
+                QUrlQuery(request.request.url()).queryItemValue("UserId") == "user" &&
+                request.request.rawHeader("Authorization").contains("fixture-token");
+        }
+        QVERIFY(requestedChapters);
+        bar->forceActiveFocus(); QTest::keyClick(m_window, Qt::Key_Return);
+        QVERIFY(bar->property("seeking").toBool());
+        const auto requestsBefore = m_network->requests.size();
+        bar->setProperty("previewPosition", 20);
+        QTRY_VERIFY(object("seekPreviewLabel")->property("text").toString().contains("Opening · Intro"));
+        bar->setProperty("previewPosition", 30);
+        QTRY_COMPARE(bar->property("contextLabel").toString(), "Middle");
+        bar->setProperty("previewPosition", 115);
+        QTRY_COMPARE(bar->property("contextLabel").toString(), "Finale · Credits");
+        auto *preview = qobject_cast<QQuickItem *>(object("trickplayPreview")); QVERIFY(preview);
+        QVERIFY(QRectF(0, 0, m_window->width(), m_window->height()).contains(preview->mapRectToScene(preview->boundingRect())));
+        const auto screenshot = qEnvironmentVariable("SOFAFIN_TIMELINE_SCREENSHOT");
+        if (!screenshot.isEmpty() && windowSize == QSize(1280, 800)) QVERIFY(m_window->grabWindow().save(screenshot));
+        QCOMPARE(m_network->requests.size(), requestsBefore);
+        bar->setProperty("previewPosition", 20);
+        QTest::keyClick(m_window, Qt::Key_Return);
+        QTRY_VERIFY(!m_app->playbackPending()); QCOMPARE(m_player->position(), 20.0);
+        QVERIFY(object("skipSegmentButton")->property("visible").toBool());
+        auto *view = qobject_cast<QQuickItem *>(object("playbackView")); QVERIFY(view);
+        QVERIFY(QMetaObject::invokeMethod(view, "focusVideo"));
+        QTest::keyClick(m_window, Qt::Key_Down);
+        QTRY_VERIFY(object("skipSegmentButton")->property("activeFocus").toBool());
+        QCOMPARE(object("skipSegmentButton")->property("text").toString(), "Skip intro");
+        QTest::keyClick(m_window, Qt::Key_Return);
+        QTRY_VERIFY(!m_app->playbackPending()); QCOMPARE(m_player->position(), 30.0);
+        QVERIFY(object("timelineChapter-2")); QVERIFY(object("timelineSegment-3"));
+        m_app->stopPlayback();
+        QVERIFY(!object("timelineChapter-0")); QVERIFY(!object("timelineSegment-0"));
+        auto next = item; next["id"] = "next";
+        m_network->respond = [original](const FixtureRequest &request) {
+            if (request.request.url().path().contains("MediaSegments/")) return FixtureResponse{"{}", 404};
+            return original(request);
+        };
+        m_app->play(next, false); QTRY_VERIFY(m_player->active());
+        QVERIFY(!legend->isVisible()); QVERIFY(m_app->message().isEmpty());
+        QVERIFY(!object("timelineChapter-0")); QVERIFY(!object("timelineSegment-0"));
+        m_app->stopPlayback();
+    }
+    void stalePlaybackMarkersAreIgnored() {
+        QVERIFY(signIn());
+        const auto original = m_network->respond;
+        m_network->respond = [original](const FixtureRequest &request) {
+            const auto path = request.request.url().path();
+            if (path.endsWith("/Items/old")) return FixtureResponse{R"({"Id":"old","Chapters":[{"Name":"Old chapter","StartPositionTicks":0}]})", 200, 100};
+            if (path.endsWith("/MediaSegments/old")) return FixtureResponse{R"({"Items":[{"Type":"Intro","StartTicks":0,"EndTicks":300000000}]})", 200, 100};
+            if (path.endsWith("/Items/new")) return FixtureResponse{R"({"Id":"new","Chapters":[{"Name":"New chapter","StartPositionTicks":0}]})"};
+            return original(request);
+        };
+        auto item = m_app->shelves().first().toMap()["items"].toList().first().toMap();
+        item["id"] = "old"; m_app->play(item, false); QTRY_VERIFY(m_player->active());
+        item["id"] = "new"; m_app->play(item, false); QTRY_VERIFY(!m_app->playbackPending());
+        QTRY_COMPARE(m_app->currentItem()["chapters"].toList().size(), 1);
+        QTest::qWait(120);
+        QCOMPARE(m_app->currentItem()["chapters"].toList().first().toMap()["name"].toString(), "New chapter");
+        QVERIFY(m_app->mediaSegments().isEmpty());
+        m_app->stopPlayback();
+        item["id"] = "old"; m_app->play(item, false); m_app->stopPlayback(); QTest::qWait(120);
+        QVERIFY(m_app->currentItem()["chapters"].toList().isEmpty());
+        QVERIFY(m_app->mediaSegments().isEmpty());
+    }
+    void chapterFallbackAndNativeSegmentPriority_data() {
+        QTest::addColumn<int>("status"); QTest::addColumn<int>("delay"); QTest::addColumn<bool>("native");
+        QTest::newRow("empty-api-before-chapters") << 200 << 0 << false;
+        QTest::newRow("empty-api-after-chapters") << 200 << 60 << false;
+        QTest::newRow("unsupported-api") << 404 << 60 << false;
+        QTest::newRow("native-before-chapters") << 200 << 0 << true;
+        QTest::newRow("native-after-chapters") << 200 << 60 << true;
+    }
+    void chapterFallbackAndNativeSegmentPriority() {
+        QFETCH(int, status); QFETCH(int, delay); QFETCH(bool, native);
+        QVERIFY(signIn());
+        const auto original = m_network->respond;
+        m_network->respond = [original, status, delay, native](const FixtureRequest &request) {
+            const auto path = request.request.url().path();
+            if (path.contains("MediaSegments/")) return FixtureResponse{native
+                ? QByteArray(R"({"Items":[{"Type":"Intro","StartTicks":500000000,"EndTicks":1500000000}]})")
+                : QByteArray(R"({"Items":[]})"), status, delay};
+            if (path.endsWith("/Items/movie-0")) return FixtureResponse{R"({"Id":"movie-0","Chapters":[
+                {"Name":"Prologue","StartPositionTicks":0},
+                {"Name":"Opening","StartPositionTicks":570390000},
+                {"Name":"Part A","StartPositionTicks":1469990000},
+                {"Name":"Outro","StartPositionTicks":12757090000}]})", 200, 20};
+            return original(request);
+        };
+        auto item = m_app->shelves().first().toMap()["items"].toList().first().toMap();
+        item["runtime"] = 1440; item["positionTicks"] = 600000000;
+        m_app->play(item, true, {{"quality", 8000000}});
+        QTRY_VERIFY(m_player->active()); QTRY_VERIFY(object("timelineChapter-3"));
+        QTest::qWait(80);
+        QCOMPARE(m_app->mediaSegments().size(), native ? 1 : 2);
+        QCOMPARE(m_app->mediaSegments().first().toMap()["end"].toDouble(), native ? 150.0 : 146.999);
+        auto *button = object("skipSegmentButton"); QVERIFY(button);
+        QVERIFY(button->property("visible").toBool()); QCOMPARE(button->property("text").toString(), "Skip intro");
+        auto *view = object("playbackView"); QVERIFY(QMetaObject::invokeMethod(view, "hideOverlay"));
+        QVERIFY(button->property("visible").toBool()); // Skip remains available when the controls hide.
+        QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(button->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Return);
+        QTRY_VERIFY(!m_app->playbackPending()); QCOMPARE(m_player->position(), native ? 150.0 : 146.999);
+        QVERIFY(!button->property("visible").toBool());
+        QVERIFY(m_app->message().isEmpty()); m_app->stopPlayback();
+    }
+    void allSegmentTypesShowSkipButtons_data() {
+        QTest::addColumn<QString>("type"); QTest::addColumn<QString>("label");
+        QTest::newRow("intro") << "Intro" << "Skip intro";
+        QTest::newRow("credits") << "Outro" << "Skip credits";
+        QTest::newRow("recap") << "Recap" << "Skip recap";
+        QTest::newRow("preview") << "Preview" << "Skip preview";
+        QTest::newRow("commercial") << "Commercial" << "Skip commercial";
+    }
+    void allSegmentTypesShowSkipButtons() {
+        QFETCH(QString, type); QFETCH(QString, label);
+        QVERIFY(signIn());
+        const auto original = m_network->respond;
+        m_network->respond = [original, type](const FixtureRequest &request) {
+            if (request.request.url().path().contains("MediaSegments/")) return FixtureResponse{
+                QJsonDocument(QJsonObject{{"Items", QJsonArray{QJsonObject{{"Type", type}, {"StartTicks", 0}, {"EndTicks", 300000000}}}}}).toJson()};
+            return original(request);
+        };
+        const auto item = m_app->shelves().first().toMap()["items"].toList().first().toMap();
+        m_app->play(item, false, {{"quality", 8000000}}); QTRY_VERIFY(m_player->active());
+        QTRY_COMPARE(m_app->mediaSegments().size(), 1);
+        auto *button = object("skipSegmentButton"); QVERIFY(button);
+        QVERIFY(button->property("visible").toBool()); QCOMPARE(button->property("text").toString(), label);
+        auto *view = object("playbackView"); QVERIFY(QMetaObject::invokeMethod(view, "focusVideo"));
+        QTest::keyClick(m_window, Qt::Key_Down); QTRY_VERIFY(button->property("activeFocus").toBool());
+        QTest::keyClick(m_window, Qt::Key_Return);
+        QTRY_VERIFY(!m_app->playbackPending()); QCOMPARE(m_player->position(), 30.0);
+        QVERIFY(!button->property("visible").toBool()); m_app->stopPlayback();
+    }
+    void skippingFinalCreditsStopsPlayback() {
+        QVERIFY(signIn());
+        auto item = m_app->shelves().first().toMap()["items"].toList().first().toMap();
+        item["runtime"] = 120; item["positionTicks"] = 950000000;
+        item["chapters"] = QVariantList{QVariantMap{{"name", "Credits"}, {"ticks", 900000000}}};
+        m_app->play(item, true, {{"quality", 8000000}}); QTRY_VERIFY(m_player->active());
+        QVERIFY(object("skipSegmentButton")->property("visible").toBool());
+        QCOMPARE(object("skipSegmentButton")->property("text").toString(), "Skip credits");
+        m_app->skipSegment();
+        QVERIFY(!m_player->active()); QVERIFY(!m_app->playbackPending()); QVERIFY(m_app->mediaSegments().isEmpty());
+    }
     void overlayBackUpAndPauseScreen() {
         QVERIFY(signIn());
         auto item = m_app->shelves().first().toMap()["items"].toList().first().toMap();
