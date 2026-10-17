@@ -1,6 +1,6 @@
 # Sofafin
 
-![Sofafin icon](assets/logo.svg)
+<img src="assets/logo.svg" alt="Sofafin icon" width="128" height="128">
 
 A native, controller-first Jellyfin client for Linux, designed for Steam Deck and
 gamescope. Browse movies and shows, resume watching, and play video through
